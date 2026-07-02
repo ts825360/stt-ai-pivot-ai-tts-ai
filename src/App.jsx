@@ -515,6 +515,10 @@ function WeatherInput({ icon: Icon, label, unit, value, min, max, step, onChange
 }
 
 function canvasPointToLatLng(point) {
+  if (Number.isFinite(point.lat) && Number.isFinite(point.lng)) {
+    return { lat: point.lat, lng: point.lng };
+  }
+
   const bounds = {
     north: 48.895,
     south: 48.835,
@@ -533,11 +537,19 @@ function buildGoogleStaticMapUrl({ origin, destination, route, mapApiKey }) {
   url.searchParams.set('maptype', 'roadmap');
   url.searchParams.set('language', 'ko');
   url.searchParams.set('center', `${(origin.lat + destination.lat) / 2},${(origin.lng + destination.lng) / 2}`);
-  url.searchParams.set('zoom', '13');
+  url.searchParams.set('zoom', '14');
+  url.searchParams.append('style', 'feature:water|color:0xd8edf2');
+  url.searchParams.append('style', 'feature:landscape|color:0xf4f0e7');
+  url.searchParams.append('style', 'feature:road|element:geometry|color:0xffffff');
+  url.searchParams.append('style', 'feature:road|element:labels|visibility:simplified');
+  url.searchParams.append('style', 'feature:poi|visibility:simplified');
+  url.searchParams.append('style', 'feature:transit|visibility:simplified');
   url.searchParams.append('markers', `color:red|label:S|${origin.lat},${origin.lng}`);
   url.searchParams.append('markers', `color:green|label:G|${destination.lat},${destination.lng}`);
   const pathPoints = route.routePoints.map(canvasPointToLatLng).map((point) => `${point.lat.toFixed(5)},${point.lng.toFixed(5)}`);
-  url.searchParams.append('path', `color:0x${route.color.replace('#', '')}ff|weight:5|${pathPoints.join('|')}`);
+  url.searchParams.append('visible', `${origin.lat},${origin.lng}`);
+  url.searchParams.append('visible', `${destination.lat},${destination.lng}`);
+  url.searchParams.append('path', `color:0x${route.color.replace('#', '')}dd|weight:6|${pathPoints.join('|')}`);
   url.searchParams.set('key', mapApiKey);
   return url.toString();
 }
@@ -609,6 +621,20 @@ function MapPanel({ places, origin, destination, route, routes, onRouteSelect, m
         ))}
       </div>
 
+      <div className="map-step-list" aria-label="상세 경로 단계">
+        {route.segments.map((segment, index) => (
+          <div key={`${segment.label}-${index}`} className="map-step">
+            <span>{index + 1}</span>
+            <div>
+              <strong>{segment.label}</strong>
+              <small>
+                {segment.mode} · 약 {segment.km}km
+              </small>
+            </div>
+          </div>
+        ))}
+      </div>
+
       <div className="map-stats">
         <StatBlock label="예상 시간" value={formatMinutes(route.minutes)} />
         <StatBlock label="도보 거리" value={`${route.walkingKm}km`} />
@@ -669,6 +695,10 @@ function RouteComparison({ routes, bestRouteId, selectedRouteId, onRouteSelect }
                 <span>
                   도보
                   <b>{route.walkingKm}km</b>
+                </span>
+                <span>
+                  노출
+                  <b>{route.exposureLabel}</b>
                 </span>
               </span>
             </button>

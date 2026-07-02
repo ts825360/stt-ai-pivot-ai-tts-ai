@@ -410,7 +410,7 @@ h1 {
 }
 
 .map-panel {
-  min-height: 590px;
+  min-height: 680px;
   padding: 18px;
 }
 
@@ -470,7 +470,7 @@ h1 {
 
 .map-canvas {
   position: relative;
-  height: 405px;
+  height: 430px;
   overflow: hidden;
   border: 1px solid #cad7d2;
   border-radius: var(--radius);
@@ -493,14 +493,14 @@ h1 {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  opacity: 0.62;
-  filter: saturate(0.85) contrast(0.96);
+  opacity: 0.78;
+  filter: saturate(0.9) contrast(0.98) brightness(1.03);
 }
 
 .seine {
   fill: none;
-  stroke: rgba(58, 132, 180, 0.56);
-  stroke-width: 7;
+  stroke: rgba(72, 126, 151, 0.22);
+  stroke-width: 3.4;
   stroke-linecap: round;
 }
 
@@ -517,15 +517,15 @@ h1 {
 
 .route-shadow {
   fill: none;
-  stroke: rgba(21, 34, 46, 0.28);
-  stroke-width: 6.2;
+  stroke: rgba(21, 34, 46, 0.34);
+  stroke-width: 7.2;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
 .route-line {
   fill: none;
-  stroke-width: 3.8;
+  stroke-width: 4.6;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -577,8 +577,56 @@ h1 {
 .map-annotation {
   position: absolute;
   transform: translate(-50%, -140%);
+  max-width: 146px;
+  background: rgba(255, 255, 255, 0.94);
   font-weight: 850;
   pointer-events: none;
+}
+
+.map-step-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(178px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.map-step {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  gap: 8px;
+  align-items: start;
+  min-height: 58px;
+  padding: 9px;
+  border: 1px solid #dbe4df;
+  border-radius: var(--radius);
+  background: #fbfcf8;
+}
+
+.map-step > span {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: #15222e;
+  color: #ffffff;
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.map-step strong {
+  display: block;
+  color: var(--ink);
+  font-size: 0.78rem;
+  line-height: 1.25;
+}
+
+.map-step small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 850;
 }
 
 .map-stats {
@@ -694,7 +742,7 @@ h1 {
 
 .route-metrics {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 7px;
 }
 
@@ -1225,8 +1273,8 @@ h1 {
 
 .hud-river {
   fill: none;
-  stroke: rgba(74, 157, 208, 0.56);
-  stroke-width: 7;
+  stroke: rgba(96, 152, 178, 0.26);
+  stroke-width: 3.4;
   stroke-linecap: round;
 }
 

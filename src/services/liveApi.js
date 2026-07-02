@@ -28,6 +28,7 @@ export async function fetchAiRecommendation({ recommendation, selectedRoute }) {
       grade: selectedRoute.grade,
       exposureLabel: selectedRoute.exposureLabel,
       reasons: selectedRoute.reasons,
+      segments: selectedRoute.segments,
       breakdown: selectedRoute.breakdown,
     },
     comparedRoutes: recommendation.routes.map((route) => ({
