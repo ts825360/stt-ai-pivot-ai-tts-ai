@@ -1,0 +1,7 @@
+<svg width="96" height="96" viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="CoolPath AI">
+  <rect width="96" height="96" rx="20" fill="#15222E"/>
+  <path d="M22 58C29 39 43 30 61 31C69 31.4 74 35.3 76 42" stroke="#F2B84B" stroke-width="8" stroke-linecap="round"/>
+  <path d="M24 62C35 63 45 59 54 50C62 42 68 39 76 40" stroke="#1EA7A1" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="26" cy="62" r="7" fill="#DE6B48"/>
+  <circle cx="76" cy="40" r="7" fill="#F6F2E8"/>
+</svg>
