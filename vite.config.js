@@ -96,7 +96,9 @@ function normalizeOpenWeather(data) {
 function coolPathLocalApi(env) {
   const weatherKey = env.VITE_WEATHER_API_KEY;
   const openaiKey = env.OPENAI_API_KEY;
-  const openaiModel = env.OPENAI_MODEL || 'gpt-4.1-mini';
+  const openaiModel = env.OPENAI_MODEL || 'gpt-5.5';
+  const openaiReasoningEffort = env.OPENAI_REASONING_EFFORT || 'low';
+  const openaiTextVerbosity = env.OPENAI_TEXT_VERBOSITY || 'low';
   const weatherProvider = getWeatherProvider(env, weatherKey);
 
   return {
@@ -108,6 +110,8 @@ function coolPathLocalApi(env) {
           maps: Boolean(env.VITE_MAP_API_KEY),
           openai: Boolean(openaiKey),
           openaiModel,
+          openaiReasoningEffort,
+          openaiTextVerbosity,
           weatherProvider,
         });
       });
@@ -179,27 +183,34 @@ function coolPathLocalApi(env) {
 
         try {
           const payload = await readJson(req);
+          const requestBody = {
+            model: openaiModel,
+            input: [
+              {
+                role: 'system',
+                content:
+                  'You are the CoolPath AI route recommendation explainer. Write a natural Korean explanation in 2 to 3 sentences using only the provided route scores and conditions. Do not overclaim precision; frame this as an MVP estimation model.',
+              },
+              {
+                role: 'user',
+                content: JSON.stringify(payload),
+              },
+            ],
+            max_output_tokens: 260,
+          };
+
+          if (openaiModel.startsWith('gpt-5')) {
+            requestBody.reasoning = { effort: openaiReasoningEffort };
+            requestBody.text = { verbosity: openaiTextVerbosity };
+          }
+
           const response = await fetch('https://api.openai.com/v1/responses', {
             method: 'POST',
             headers: {
               Authorization: `Bearer ${openaiKey}`,
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify({
-              model: openaiModel,
-              input: [
-                {
-                  role: 'system',
-                  content:
-                    'You are the CoolPath AI route recommendation explainer. Write a natural Korean explanation in 2 to 3 sentences using only the provided route scores and conditions. Do not overclaim precision; frame this as an MVP estimation model.',
-                },
-                {
-                  role: 'user',
-                  content: JSON.stringify(payload),
-                },
-              ],
-              max_output_tokens: 260,
-            }),
+            body: JSON.stringify(requestBody),
           });
           const data = await response.json();
 
