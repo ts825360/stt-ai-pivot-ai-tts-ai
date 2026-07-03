@@ -18,8 +18,7 @@ const anchors = {
   rivoli: { x: 62, y: 46, label: 'Rue de Rivoli' },
   seineWest: { x: 33, y: 60, label: 'Seine 서측 보행로' },
   seineMid: { x: 48, y: 58, label: 'Seine 중앙 보행로' },
-  seineEast: { x: 64, y: 58, label: 'Cite 수변 진입' },
-  cite: { x: 64, y: 57, label: 'Cite 섬' },
+  seineEast: { x: 64, y: 58, label: 'Cite 섬 진입' },
   saintGermain: { x: 52, y: 66, label: 'Saint-Germain' },
   luxNorth: { x: 57, y: 71, label: 'Luxembourg 북문' },
   champsAxis: { x: 34, y: 39, label: 'Champs-Elysees 축' },
@@ -27,7 +26,6 @@ const anchors = {
   opera: { x: 53, y: 34, label: 'Opera 연결' },
   pigalle: { x: 47, y: 24, label: 'Pigalle 환승축' },
   anvers: { x: 49, y: 20, label: 'Anvers 진입' },
-  lesHalles: { x: 61, y: 42, label: 'Les Halles' },
   maraisWest: { x: 70, y: 47, label: 'Marais 골목' },
   busWest: { x: 31, y: 55, label: '서측 버스 정류장' },
   busCentral: { x: 47, y: 50, label: '중앙 환승 정류장' },
@@ -115,7 +113,7 @@ function pickSpineAnchors(origin, destination, strategy) {
 
   if (toNorth) ids = ['champsAxis', 'madeleine', 'opera', 'pigalle', 'anvers'];
   if (toSouth) ids = ['concorde', 'tuileries', 'saintGermain', 'luxNorth'];
-  if (toEast) ids = ['tuileries', 'rivoli', 'cite', 'maraisWest'];
+  if (toEast) ids = ['tuileries', 'rivoli', 'maraisWest'];
   if (westToCenter && strategy !== 'riverside') ids = ['pontAlexandre', 'concorde', 'tuileries', 'palaisRoyal'];
 
   return ids.map(anchorPoint).filter((point) => isAnchorUseful(point, envelope));
@@ -144,8 +142,8 @@ function buildRiversidePath(origin, destination) {
     .map(anchorPoint)
     .filter((point) => isAnchorUseful(point, envelope, 26));
   const fallback = [
-    dynamicPoint('수변 접근', origin, destination, 0.35, 0, 8),
-    dynamicPoint('수변 보행로', origin, destination, 0.65, 0, 8),
+    dynamicPoint('강변 접근', origin, destination, 0.35, 0, 8),
+    dynamicPoint('강변 보행로', origin, destination, 0.65, 0, 8),
   ];
   return dedupePoints([placePoint(origin), ...(river.length >= 2 ? river : fallback), placePoint(destination)]);
 }
@@ -192,16 +190,18 @@ function nameRoute(strategyId, points, transfers) {
     return '최단 보행축';
   }
 
-  if (strategyId === 'metro') return transfers > 1 ? 'Metro 환승 압축' : 'Metro 도보 절감';
+  if (strategyId === 'metro') return transfers > 1 ? 'Metro 환승 경로' : 'Metro 보행 절감';
   if (strategyId === 'shade') return labels.includes('Tuileries') ? 'Tuileries 그늘 우회' : '그늘축 우회';
-  if (strategyId === 'riverside') return 'Seine 수변 완충';
-  return 'Bus 접근 압축';
+  if (strategyId === 'riverside') return 'Seine 강변 우회';
+  return 'Bus 접근 경로';
 }
 
 function createCandidateRoutes(origin, destination) {
   const avgShade = (origin.shadeProfile + destination.shadeProfile) / 2;
   const avgCrowd = (origin.crowdProfile + destination.crowdProfile) / 2;
-  const hasHill = destination.id === 'montmartre' || origin.id === 'montmartre';
+  const originRef = origin.sourceId || origin.id;
+  const destinationRef = destination.sourceId || destination.id;
+  const hasHill = destinationRef === 'montmartre' || originRef === 'montmartre';
   const rawPaths = {
     direct: buildDirectPath(origin, destination),
     metro: buildMetroPath(origin, destination),
@@ -241,12 +241,11 @@ function createCandidateRoutes(origin, destination) {
     return {
       id,
       name: nameRoute(id, points, transfers),
-      type: id === 'metro' ? '도보 + Metro' : id === 'bus' ? '도보 + Bus' : id === 'riverside' ? '수변 보행' : '도보',
+      type: id === 'metro' ? '도보 + Metro' : id === 'bus' ? '도보 + Bus' : id === 'riverside' ? '강변 보행' : '도보',
       color: routePalette[id],
       minutes,
       walkingKm: round(walkingKm, 1),
       roadWidthM,
-      buildingDensity: shadeCover,
       shadeCover,
       riverAdjacent,
       usesTransit: transitHeavy,
@@ -268,8 +267,8 @@ function createCandidateRoutes(origin, destination) {
             : id === 'shade'
               ? ['그늘 우선', '휴식 지점 많음']
               : id === 'riverside'
-                ? ['수변 바람', '개방감']
-                : ['도보 압축', '대기 변수'],
+                ? ['강변 바람', '개방감']
+                : ['도보 절감', '대기 변동'],
     };
   });
 }
@@ -282,7 +281,7 @@ function modelWeather(weather, timeSlot) {
   return {
     feelsLike,
     heatStress: clamp01((apparentHeat - 24) / 12),
-    conditionLabel: feelsLike >= 36 ? '열 노출 위험' : feelsLike >= 32 ? '매우 더움' : feelsLike >= 28 ? '더움' : '보통',
+    conditionLabel: feelsLike >= 36 ? '야외 노출 위험' : feelsLike >= 32 ? '매우 더움' : feelsLike >= 28 ? '더움' : '보통',
   };
 }
 
@@ -330,15 +329,15 @@ function scoreRoutes(routes, weather, timeSlot, mode) {
       : Math.round((comfortScore * mode.weights.comfort + speedScore * mode.weights.speed) * 0.72);
 
     const reasons = [];
-    if (route.riverAdjacent) reasons.push('세느강 인접 구간으로 바람과 개방감을 반영했습니다.');
+    if (route.riverAdjacent) reasons.push('강변 인접 구간으로 바람과 개방감을 반영했습니다.');
     if (route.shadeCover >= 0.66) reasons.push('정원과 건물 그늘축을 통과해 직사광선 노출을 줄입니다.');
     if (weather.wind >= 2.5) reasons.push('현재 풍속이 있어 체감 더위를 일부 낮출 수 있습니다.');
-    if (route.usesTransit) reasons.push('대중교통을 활용해 실제 도보 거리를 줄였습니다.');
-    if (route.walkingKm <= 0.9) reasons.push('도보 거리가 짧아 이동 피로가 낮습니다.');
+    if (route.usesTransit) reasons.push('대중교통을 사용해 실제 보행 거리를 줄입니다.');
+    if (route.walkingKm <= 0.9) reasons.push('보행 거리가 짧아 이동 피로가 낮습니다.');
     if (weatherModel.feelsLike >= 32) reasons.push('체감 더위가 높아 야외 보행 구간을 강하게 감점했습니다.');
-    if (timeSlot.solarElevationDeg >= 55 && shadePotential < 0.45) reasons.push('강한 햇빛 시간대라 개방 보행로의 부담이 큽니다.');
+    if (timeSlot.solarElevationDeg >= 55 && shadePotential < 0.45) reasons.push('강한 햇빛 시간대에는 개방 보행로의 부담이 큽니다.');
     if (route.minutes > baselineTravelTimeMin + 12) reasons.push('쾌적성을 위해 이동 시간이 다소 늘어납니다.');
-    if (route.walkingKm >= 1.8) reasons.push('도보 거리가 길어 더운 시간대에는 부담이 될 수 있습니다.');
+    if (route.walkingKm >= 1.8) reasons.push('보행 거리가 길어 더운 시간대에는 부담이 될 수 있습니다.');
     if (!allowed) reasons.push('최단 경로 대비 +20분 제한을 넘어 보조 후보로 분류했습니다.');
 
     return {
@@ -375,42 +374,42 @@ function buildNarrative(bestRoute, routes, context) {
   const excluded = routes.filter((route) => !route.allowed);
   const heatPhrase =
     context.weatherModel.feelsLike >= 36
-      ? '현재 조건은 열 노출 위험이 커서 장시간 도보를 강하게 감점했습니다'
+      ? '현재 조건은 야외 노출 위험이 커서 장시간 보행을 강하게 감점했습니다'
       : context.weatherModel.feelsLike >= 32
-        ? '현재 체감 더위가 높아 도보거리와 직사광선 노출을 크게 반영했습니다'
-        : '현재 날씨에서는 시간과 도보 부담을 균형 있게 비교했습니다';
+        ? '현재 체감 더위가 높아 보행거리와 직사광선 노출을 크게 반영했습니다'
+        : '현재 날씨에서는 시간과 보행 부담을 균형 있게 비교했습니다';
   const modePhrase =
     context.mode.id === 'time'
-      ? '시간 우선 모드라 최단 이동시간과 대기 부담을 더 크게 보았습니다.'
+      ? '시간 우선 모드는 최단 이동시간과 대기 부담을 더 크게 봅니다.'
       : context.mode.id === 'comfort'
-        ? '쾌적 우선 모드라 더위, 햇빛, 도보거리 감점을 더 크게 적용했습니다.'
-        : '균형 추천 모드라 시간 손실과 쾌적도 개선을 함께 계산했습니다.';
+        ? '쾌적 우선 모드는 더위, 햇빛, 보행거리 감점을 더 크게 적용합니다.'
+        : '균형 추천 모드는 시간 손실과 쾌적도 개선을 함께 계산합니다.';
   const tradeoff =
     fastest.id !== bestRoute.id
-      ? `${fastest.name}보다 ${bestRoute.detourMinutes}분 더 걸리지만 도보 부담과 햇빛 노출을 줄이는 쪽이 유리했습니다.`
+      ? `${fastest.name}보다 ${bestRoute.detourMinutes}분 더 걸리지만 보행 부담과 햇빛 노출을 줄이는 쪽이 유리합니다.`
       : '가장 빠른 후보이면서 현재 모드에서도 추천 점수가 가장 높게 계산되었습니다.';
   const comfortNote =
     mostComfortable.id !== bestRoute.id
-      ? `${mostComfortable.name}의 Comfort Score가 더 높지만, 현재 모드에서는 추가 시간이 커서 추천 순위가 내려갔습니다.`
+      ? `${mostComfortable.name}의 Comfort Score가 더 높지만 현재 모드에서는 추가 시간이 커 추천 순위가 내려갔습니다.`
       : '쾌적도 기준에서도 가장 안정적인 후보로 계산되었습니다.';
   const excludedNote =
-    excluded.length > 0 ? `${excluded.map((route) => route.name).join(', ')}은 +20분 우회 제한 때문에 보조 후보로만 표시했습니다.` : '';
+    excluded.length > 0 ? `${excluded.map((route) => route.name).join(', ')}는 +20분 우회 제한 때문에 보조 후보로만 표시합니다.` : '';
 
   return {
     title: `${bestRoute.name}을 추천합니다`,
-    body: `${heatPhrase}. ${modePhrase} ${bestRoute.name}은 총 ${bestRoute.minutes}분, 도보 ${bestRoute.walkingKm}km, 햇빛 노출 ${bestRoute.exposureLabel}으로 계산되었습니다.`,
+    body: `${heatPhrase}. ${modePhrase} ${bestRoute.name}은 총 ${bestRoute.minutes}분, 보행 ${bestRoute.walkingKm}km, 햇빛 노출 ${bestRoute.exposureLabel}으로 계산되었습니다.`,
     tradeoff,
     comfortNote,
     excludedNote,
   };
 }
 
-export function buildRouteRecommendation({ originId, destinationId, weather, timeSlotId, modeId, places }) {
-  const origin = findById(places, originId);
-  const destination = findById(places, destinationId);
+export function buildRouteRecommendation({ origin, originId, destination, destinationId, weather, timeSlotId, modeId, places }) {
+  const selectedOrigin = origin ?? findById(places, originId);
+  const selectedDestination = destination ?? findById(places, destinationId);
   const selectedTimeSlot = findById(timeSlots, timeSlotId);
   const selectedMode = findById(userModes, modeId);
-  const rawRoutes = createCandidateRoutes(origin, destination);
+  const rawRoutes = createCandidateRoutes(selectedOrigin, selectedDestination);
   const scoredRoutes = scoreRoutes(rawRoutes, weather, selectedTimeSlot, selectedMode).sort(
     (a, b) => b.recommendationScore - a.recommendationScore,
   );
@@ -419,8 +418,8 @@ export function buildRouteRecommendation({ originId, destinationId, weather, tim
   const model = modelWeather(weather, selectedTimeSlot);
 
   return {
-    origin,
-    destination,
+    origin: selectedOrigin,
+    destination: selectedDestination,
     timeSlot: selectedTimeSlot,
     mode: selectedMode,
     weatherModel: model,

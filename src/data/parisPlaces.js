@@ -3,7 +3,7 @@ export const parisPlaces = [
     id: 'eiffel',
     name: '에펠탑',
     shortName: 'Eiffel',
-    area: '7구 / 샹드마르스',
+    area: '7구 / 샹 드 마르스',
     lat: 48.8584,
     lng: 2.2945,
     x: 24,
@@ -133,7 +133,7 @@ export const timeSlots = [
   {
     id: '11',
     label: '11:00 오전',
-    sunLabel: '상승하는 햇빛',
+    sunLabel: '강해지는 햇빛',
     heatDelta: 1,
     solarElevationDeg: 55,
     crowdBias: 1.2,
@@ -168,7 +168,7 @@ export const userModes = [
   {
     id: 'time',
     label: '시간 우선',
-    description: '최단 이동시간과 대기 부담을 더 크게 반영',
+    description: '이동 시간과 대기 시간을 더 크게 반영',
     weights: {
       comfort: 0.35,
       speed: 0.65,
@@ -183,7 +183,7 @@ export const userModes = [
   {
     id: 'balanced',
     label: '균형 추천',
-    description: '시간과 쾌적도를 함께 고려한 기본 추천',
+    description: '시간과 쾌적도를 함께 고려하는 기본 추천',
     weights: {
       comfort: 0.55,
       speed: 0.45,
@@ -198,7 +198,7 @@ export const userModes = [
   {
     id: 'comfort',
     label: '쾌적 우선',
-    description: '더위, 도보거리, 햇빛 노출을 더 크게 반영',
+    description: '더위, 보행 부담, 햇빛 노출을 더 크게 반영',
     weights: {
       comfort: 0.78,
       speed: 0.22,

@@ -56,3 +56,46 @@ export async function fetchAiRecommendation({ recommendation, selectedRoute }) {
 
   return data;
 }
+
+export async function fetchTravelGuideChat({ question, recommendation, selectedRoute, plannedPlaces }) {
+  const payload = {
+    question,
+    destination: {
+      name: recommendation.destination.name,
+      area: recommendation.destination.area,
+    },
+    weather: {
+      feelsLike: recommendation.weatherModel.feelsLike,
+      condition: recommendation.weatherModel.conditionLabel,
+    },
+    route: {
+      name: selectedRoute.name,
+      type: selectedRoute.type,
+      minutes: selectedRoute.minutes,
+      walkingKm: selectedRoute.walkingKm,
+      recommendationScore: selectedRoute.recommendationScore,
+      exposureLabel: selectedRoute.exposureLabel,
+      reasons: selectedRoute.reasons,
+      segments: selectedRoute.segments,
+    },
+    plannedPlaces: plannedPlaces.map((place) => ({
+      name: place.name,
+      area: place.area,
+    })),
+  };
+
+  const response = await fetch('/api/travel-guide', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error || 'Travel guide request failed.');
+  }
+
+  return data;
+}

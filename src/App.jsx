@@ -1,43 +1,103 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowLeft,
   ArrowRight,
-  BarChart3,
+  Bot,
   Bus,
+  CalendarDays,
   Camera,
-  ChevronUp,
+  Check,
   Clock3,
+  Coffee,
   Compass,
   Droplets,
-  Info,
+  Home,
+  Image,
+  Landmark,
+  Laptop,
+  ListChecks,
   Map,
   MapPin,
+  MessagesSquare,
   Navigation,
   Route,
+  Search,
+  Send,
   ShieldCheck,
   Sparkles,
   Sun,
   ThermometerSun,
   TrainFront,
+  Trees,
+  User,
+  Users,
+  Utensils,
   Wind,
   X,
 } from 'lucide-react';
-import { parisPlaces, timeSlots, userModes, weatherPresets } from './data/parisPlaces.js';
-import { fetchAiRecommendation, fetchLiveWeather } from './services/liveApi.js';
+import { parisPlaces, userModes, weatherPresets } from './data/parisPlaces.js';
+import { fetchLiveWeather, fetchTravelGuideChat } from './services/liveApi.js';
 import { buildRouteRecommendation } from './services/routeEngine.js';
 
-const googleMapKey = import.meta.env.VITE_MAP_API_KEY;
+const pages = [
+  { id: 'plan', label: 'Plan', icon: CalendarDays },
+  { id: 'routes', label: '지도', icon: Map },
+  { id: 'extras', label: '가이드', icon: MessagesSquare },
+];
 
-const initialWeather = {
-  temperature: 35,
-  humidity: 72,
-  wind: 1,
+const durationOptions = [
+  { id: '2', label: '2박', placeLimit: 2 },
+  { id: '3', label: '3박', placeLimit: 3 },
+  { id: '4', label: '4박', placeLimit: 4 },
+  { id: '5', label: '5박', placeLimit: 5 },
+];
+
+const paceOptions = [
+  {
+    id: 'relaxed',
+    label: '여유롭게',
+    caption: '그늘과 휴식 우선',
+    modeId: 'comfort',
+    icon: Coffee,
+  },
+  {
+    id: 'balanced',
+    label: '밸런스',
+    caption: '쾌적도와 시간 균형',
+    modeId: 'balanced',
+    icon: ShieldCheck,
+  },
+  {
+    id: 'packed',
+    label: '꽉 채워서',
+    caption: '짧은 이동 우선',
+    modeId: 'time',
+    icon: Navigation,
+  },
+];
+
+const placeMeta = {
+  eiffel: { icon: Landmark, badge: '랜드마크', note: '야외 노출이 커서 오후에는 그늘 경로가 유리합니다.' },
+  louvre: { icon: Landmark, badge: '실내 명소', note: '더운 시간대에 실내 대피가 쉬운 목적지입니다.' },
+  orsay: { icon: Landmark, badge: '미술관', note: '센강 남안 이동과 실내 휴식을 함께 잡기 좋습니다.' },
+  arc: { icon: Landmark, badge: '전망 포인트', note: '대로 주변 보행 노출이 있어 대중교통 접근이 좋습니다.' },
+  montmartre: { icon: Coffee, badge: '언덕 동네', note: '오르막 부담이 커서 Metro나 Bus 후보를 우선 비교합니다.' },
+  'notre-dame': { icon: Landmark, badge: '시테섬', note: '강변 접근과 중심부 이동을 함께 보기 좋습니다.' },
+  sainte: { icon: Landmark, badge: '성당', note: '시테섬 안쪽 목적지라 표지판 확인이 중요합니다.' },
+  luxembourg: { icon: Trees, badge: '쉴만한 곳', note: '그늘과 휴식 점수가 높은 공원형 목적지입니다.' },
+  marais: { icon: Utensils, badge: '맛집/카페', note: '좁은 골목과 상권이 많아 도보 휴식 선택지가 좋습니다.' },
+  champs: { icon: Search, badge: '쇼핑 거리', note: '혼잡과 햇빛 노출을 함께 고려해야 합니다.' },
 };
 
-const modeIcons = {
-  time: Clock3,
-  balanced: ShieldCheck,
-  comfort: Sun,
-};
+const guideSuggestions = [
+  '이 목적지 근처에서 더위를 피할 만한 곳을 추천해줘',
+  '지하철 입구 사진을 찍으면 무엇을 확인해야 해?',
+  '정류장이 맞는지 확인하려면 어떤 표지판을 봐야 해?',
+];
+
+function normalizePage(page) {
+  return ['plan', 'routes', 'extras', 'camera'].includes(page) ? page : 'plan';
+}
 
 function formatMinutes(minutes) {
   if (minutes < 60) return `${minutes}분`;
@@ -52,62 +112,180 @@ function getTransitIcon(routeType) {
   return Navigation;
 }
 
+function getPlaceMeta(placeId) {
+  return placeMeta[placeId] ?? { icon: MapPin, badge: '저장 장소', note: '선택한 여정 후보입니다.' };
+}
+
+function getDuration(durationId) {
+  return durationOptions.find((option) => option.id === durationId) ?? durationOptions[1];
+}
+
+function getPace(paceId) {
+  return paceOptions.find((option) => option.id === paceId) ?? paceOptions[1];
+}
+
+function orderPlacesForPlan(places, weather, paceId) {
+  const heatPressure = weather.temperature >= 30 || weather.humidity >= 68 ? 1 : 0.45;
+  const pace = getPace(paceId);
+
+  return [...places].sort((a, b) => {
+    const score = (place) => {
+      const shade = place.shadeProfile * (38 + heatPressure * 26);
+      const crowdRelief = (1 - place.crowdProfile) * (pace.id === 'packed' ? 8 : 18);
+      const transitRelief = place.id === 'montmartre' || place.id === 'arc' ? 6 : 0;
+      const indoorRelief = ['louvre', 'orsay', 'sainte'].includes(place.id) ? 12 * heatPressure : 0;
+      const parkRelief = place.id === 'luxembourg' ? 15 : 0;
+      const speedBias = pace.modeId === 'time' ? -place.x * 0.05 : 0;
+      return shade + crowdRelief + transitRelief + indoorRelief + parkRelief + speedBias;
+    };
+
+    return score(b) - score(a);
+  });
+}
+
+function buildGuideWelcome(destination, route) {
+  return {
+    id: `welcome-${destination.id}-${route.id}`,
+    role: 'assistant',
+    text: `${destination.name} 여정을 기준으로 답변할게요. 여행 가이드처럼 주변 추천, 더위를 피하는 동선, 사진으로 표지판이나 정류장을 확인하는 방법까지 함께 봅니다.`,
+  };
+}
+
+function buildPhotoAnalysis(route, destination) {
+  if (route.id === 'metro') {
+    return {
+      title: 'Metro 입구와 노선 방향을 확인하세요',
+      body: `${destination.shortName} 방향으로 가려면 역명, 노선 번호, 출구 표기가 함께 보이는지 확인하는 것이 좋습니다.`,
+      checks: ['M 또는 Metro 표지', '노선 번호와 방향', '출구 번호 또는 거리 표지'],
+    };
+  }
+
+  if (route.id === 'bus') {
+    return {
+      title: '정류장 이름과 진행 방향을 확인하세요',
+      body: '버스 경로는 정류장 반대편으로 들어가면 시간이 크게 늘어납니다. 표지판의 정류장명과 노선 방향을 먼저 확인하세요.',
+      checks: ['정류장 이름', '버스 번호', '종점 방향'],
+    };
+  }
+
+  if (route.id === 'riverside') {
+    return {
+      title: '강변 보행로 진입 표식을 찾으세요',
+      body: '강변으로 내려가는 계단이나 보행자 전용 표식을 확인하면 차량 동선과 섞이지 않고 이동할 수 있습니다.',
+      checks: ['보행자 전용 표식', '강변 진입 계단', '다리 이름'],
+    };
+  }
+
+  if (route.id === 'shade') {
+    return {
+      title: '그늘 골목과 공원 입구를 확인하세요',
+      body: '건물 그늘이 이어지는 골목, 공원 입구, 아케이드 표식을 기준으로 직사광선 노출을 줄이는 방향을 잡습니다.',
+      checks: ['공원 입구', '보행자 골목', '그늘이 이어지는 방향'],
+    };
+  }
+
+  return {
+    title: '목적지 방향 표지와 횡단 동선을 확인하세요',
+    body: '최단 보행 경로는 빠르지만 노출이 큽니다. 표지판과 횡단보도를 확인하면서 그늘이 있는 쪽으로 붙어 이동하세요.',
+    checks: ['목적지 방향 표지', '횡단보도', '그늘 보행 가능 구간'],
+  };
+}
+
 function App() {
-  const [originId, setOriginId] = useState('eiffel');
+  const [activePage, setActivePage] = useState(() => normalizePage(window.location.hash.replace('#', '')));
+  const [originAddress, setOriginAddress] = useState('12 Rue de la Bourdonnais, Paris');
+  const [originAnchorId, setOriginAnchorId] = useState('eiffel');
+  const [selectedPlaceIds, setSelectedPlaceIds] = useState(['louvre', 'orsay', 'luxembourg']);
   const [destinationId, setDestinationId] = useState('louvre');
-  const [timeSlotId, setTimeSlotId] = useState('14');
-  const [modeId, setModeId] = useState('balanced');
-  const [weather, setWeather] = useState(initialWeather);
+  const [durationId, setDurationId] = useState('3');
+  const [paceId, setPaceId] = useState('balanced');
+  const [weather, setWeather] = useState(weatherPresets[0].values);
   const [weatherApiState, setWeatherApiState] = useState({
     status: 'idle',
-    message: '목업 날씨 사용 중',
+    message: '목적지를 선택하면 날씨를 자동 조회합니다.',
   });
-  const [aiState, setAiState] = useState({
-    status: 'idle',
-    message: '',
-    text: '',
-    source: '',
-  });
-  const [isHudOpen, setIsHudOpen] = useState(false);
+  const [selectedRouteId, setSelectedRouteId] = useState('');
+  const [guideMessages, setGuideMessages] = useState([]);
+  const [guideInput, setGuideInput] = useState('');
+  const [guideStatus, setGuideStatus] = useState('idle');
   const [cameraStatus, setCameraStatus] = useState('idle');
   const [cameraStream, setCameraStream] = useState(null);
+  const [cameraDevices, setCameraDevices] = useState([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState('');
+  const [photoPreview, setPhotoPreview] = useState('');
+  const [photoAnalysis, setPhotoAnalysis] = useState(null);
   const videoRef = useRef(null);
+  const canvasRef = useRef(null);
   const streamRef = useRef(null);
+
+  const selectedPlaces = useMemo(
+    () => selectedPlaceIds.map((id) => parisPlaces.find((place) => place.id === id)).filter(Boolean),
+    [selectedPlaceIds],
+  );
+  const orderedPlaces = useMemo(() => orderPlacesForPlan(selectedPlaces, weather, paceId), [selectedPlaces, weather, paceId]);
+  const plannedPlaces = useMemo(
+    () => orderedPlaces.slice(0, Math.min(getDuration(durationId).placeLimit, orderedPlaces.length)),
+    [durationId, orderedPlaces],
+  );
+  const pace = getPace(paceId);
+  const modeId = pace.modeId;
+  const originAnchor = useMemo(
+    () => parisPlaces.find((place) => place.id === originAnchorId) ?? parisPlaces[0],
+    [originAnchorId],
+  );
+  const destination = useMemo(
+    () => parisPlaces.find((place) => place.id === destinationId) ?? plannedPlaces[0] ?? parisPlaces[1],
+    [destinationId, plannedPlaces],
+  );
+  const originLocation = useMemo(() => {
+    const trimmedAddress = originAddress.trim();
+
+    return {
+      ...originAnchor,
+      id: trimmedAddress ? `custom-${originAnchor.id}` : originAnchor.id,
+      sourceId: originAnchor.id,
+      name: trimmedAddress || originAnchor.name,
+      shortName: trimmedAddress ? '내 출발지' : originAnchor.shortName,
+      area: trimmedAddress ? '직접 입력 주소' : originAnchor.area,
+    };
+  }, [originAddress, originAnchor]);
 
   const recommendation = useMemo(
     () =>
       buildRouteRecommendation({
-        originId,
-        destinationId,
+        origin: originLocation,
+        destination,
         weather,
-        timeSlotId,
+        timeSlotId: '14',
         modeId,
         places: parisPlaces,
       }),
-    [originId, destinationId, weather, timeSlotId, modeId],
+    [originLocation, destination, weather, modeId],
   );
 
-  const [selectedRouteId, setSelectedRouteId] = useState(recommendation.bestRoute.id);
   const selectedRoute = recommendation.routes.find((route) => route.id === selectedRouteId) ?? recommendation.bestRoute;
+
+  useEffect(() => {
+    const handleHashChange = () => setActivePage(normalizePage(window.location.hash.replace('#', '')));
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
 
   useEffect(() => {
     setSelectedRouteId(recommendation.bestRoute.id);
   }, [recommendation.bestRoute.id]);
 
   useEffect(() => {
-    setAiState({
-      status: 'idle',
-      message: '',
-      text: '',
-      source: '',
-    });
-  }, [selectedRouteId, recommendation.bestRoute.id, weather, modeId]);
+    setGuideMessages([buildGuideWelcome(destination, selectedRoute)]);
+    setGuideInput('');
+    setGuideStatus('idle');
+  }, [destination.id, selectedRoute.id]);
 
   useEffect(() => {
     if (videoRef.current && cameraStream) {
       videoRef.current.srcObject = cameraStream;
     }
-  }, [cameraStream]);
+  }, [cameraStream, activePage]);
 
   useEffect(
     () => () => {
@@ -116,401 +294,511 @@ function App() {
     [],
   );
 
-  const updateWeather = (field, value) => {
-    setWeather((current) => ({
-      ...current,
-      [field]: Number(value),
-    }));
-  };
+  useEffect(() => {
+    let cancelled = false;
 
-  const selectPlace = (field, value) => {
-    if (field === 'origin') {
-      setOriginId(value);
-      if (value === destinationId) {
-        const next = parisPlaces.find((place) => place.id !== value);
-        setDestinationId(next.id);
+    async function loadDestinationWeather() {
+      setWeatherApiState({
+        status: 'loading',
+        message: `${destination.name} 기준 날씨를 불러오는 중입니다.`,
+      });
+
+      try {
+        const liveWeather = await fetchLiveWeather(destination);
+        if (cancelled) return;
+        setWeather({
+          temperature: liveWeather.temperature,
+          humidity: liveWeather.humidity,
+          wind: liveWeather.wind,
+        });
+        setWeatherApiState({
+          status: 'success',
+          message: `${liveWeather.city || destination.name} · ${liveWeather.condition} · ${liveWeather.source}`,
+        });
+      } catch (error) {
+        if (cancelled) return;
+        setWeatherApiState({
+          status: 'error',
+          message: `날씨 조회 실패: ${error.message}`,
+        });
       }
-      return;
     }
 
-    setDestinationId(value);
-    if (value === originId) {
-      const next = parisPlaces.find((place) => place.id !== value);
-      setOriginId(next.id);
+    loadDestinationWeather();
+    return () => {
+      cancelled = true;
+    };
+  }, [destination.id]);
+
+  const navigateTo = (page) => {
+    if (page !== 'camera') stopCamera();
+    setActivePage(page);
+    if (window.location.hash !== `#${page}`) {
+      window.location.hash = page;
     }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const loadDemoScenario = () => {
-    setOriginId('eiffel');
-    setDestinationId('louvre');
-    setTimeSlotId('14');
-    setModeId('comfort');
-    setWeather(weatherPresets[0].values);
-    setWeatherApiState({
-      status: 'idle',
-      message: '폭염 시연값 적용',
+  const togglePlace = (placeId) => {
+    setSelectedPlaceIds((current) => {
+      if (current.includes(placeId)) {
+        return current.length === 1 ? current : current.filter((id) => id !== placeId);
+      }
+      return [...current, placeId];
     });
   };
 
-  const loadLiveWeather = async () => {
-    setWeatherApiState({
-      status: 'loading',
-      message: `${recommendation.destination.name} 기준 날씨를 불러오는 중`,
-    });
+  const generatePlan = () => {
+    const nextDestination = plannedPlaces[0] ?? selectedPlaces[0] ?? parisPlaces[1];
+    setDestinationId(nextDestination.id);
+    navigateTo('routes');
+  };
+
+  const askTravelGuide = async (questionOverride) => {
+    const question = (questionOverride ?? guideInput).trim();
+    if (!question || guideStatus === 'loading') return;
+
+    setGuideInput('');
+    setGuideStatus('loading');
+    setGuideMessages((current) => [...current, { id: `user-${Date.now()}`, role: 'user', text: question }]);
 
     try {
-      const liveWeather = await fetchLiveWeather(recommendation.destination);
-      setWeather({
-        temperature: liveWeather.temperature,
-        humidity: liveWeather.humidity,
-        wind: liveWeather.wind,
-      });
-      setWeatherApiState({
-        status: 'success',
-        message: `${liveWeather.city || recommendation.destination.name} · ${liveWeather.condition} · ${liveWeather.source}`,
-      });
-    } catch (error) {
-      setWeatherApiState({
-        status: 'error',
-        message: error.message,
-      });
-    }
-  };
-
-  const generateAiExplanation = async () => {
-    setAiState({
-      status: 'loading',
-      message: 'OpenAI가 추천 이유를 생성하는 중',
-      text: '',
-      source: '',
-    });
-
-    try {
-      const result = await fetchAiRecommendation({
+      const result = await fetchTravelGuideChat({
+        question,
         recommendation,
         selectedRoute,
+        plannedPlaces,
       });
-      setAiState({
-        status: 'success',
-        message: 'OpenAI 설명 생성 완료',
-        text: result.text,
-        source: result.source,
-      });
+      setGuideMessages((current) => [
+        ...current,
+        {
+          id: `assistant-${Date.now()}`,
+          role: 'assistant',
+          text: result.text,
+          source: result.source,
+        },
+      ]);
+      setGuideStatus('idle');
     } catch (error) {
-      setAiState({
-        status: 'error',
-        message: error.message,
-        text: '',
-        source: '',
-      });
+      setGuideMessages((current) => [
+        ...current,
+        {
+          id: `assistant-${Date.now()}`,
+          role: 'assistant',
+          text: `지금은 AI 응답을 가져오지 못했습니다. 그래도 ${destination.name} 이동에서는 ${selectedRoute.name} 기준으로 표지판, 정류장명, 출구 번호를 먼저 확인하는 것이 안전합니다. (${error.message})`,
+        },
+      ]);
+      setGuideStatus('error');
     }
   };
 
-  const startGuidance = async () => {
-    setIsHudOpen(true);
+  const refreshCameraDevices = async () => {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter((device) => device.kind === 'videoinput');
+      setCameraDevices(videoDevices);
+      if (!selectedDeviceId && videoDevices[0]) {
+        setSelectedDeviceId(videoDevices[0].deviceId);
+      }
+    } catch {
+      setCameraDevices([]);
+    }
+  };
+
+  const startCamera = async (deviceId = selectedDeviceId) => {
+    setActivePage('camera');
+    if (window.location.hash !== '#camera') {
+      window.location.hash = 'camera';
+    }
     setCameraStatus('loading');
 
     const forceMockCamera = new URLSearchParams(window.location.search).get('camera') === 'mock';
-    if (forceMockCamera) {
+    if (forceMockCamera || !navigator.mediaDevices?.getUserMedia) {
       setCameraStatus('mock');
-      return;
-    }
-
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setCameraStatus('mock');
+      setPhotoAnalysis(buildPhotoAnalysis(selectedRoute, recommendation.destination));
       return;
     }
 
     try {
+      const video = deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: 'environment' } };
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'environment' },
-        },
+        video,
         audio: false,
       });
       streamRef.current?.getTracks().forEach((track) => track.stop());
       streamRef.current = stream;
       setCameraStream(stream);
       setCameraStatus('live');
+      await refreshCameraDevices();
     } catch {
       setCameraStream(null);
       setCameraStatus('mock');
+      setPhotoAnalysis(buildPhotoAnalysis(selectedRoute, recommendation.destination));
     }
   };
 
-  const stopGuidance = () => {
+  const stopCamera = () => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     setCameraStream(null);
     setCameraStatus('idle');
-    setIsHudOpen(false);
   };
+
+  const changeCameraDevice = async (deviceId) => {
+    setSelectedDeviceId(deviceId);
+    if (cameraStatus === 'live') {
+      await startCamera(deviceId);
+    }
+  };
+
+  const capturePhoto = () => {
+    const analysis = buildPhotoAnalysis(selectedRoute, recommendation.destination);
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+
+    if (video && canvas && video.videoWidth && video.videoHeight) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const context = canvas.getContext('2d');
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      setPhotoPreview(canvas.toDataURL('image/jpeg', 0.82));
+    }
+
+    setPhotoAnalysis(analysis);
+  };
+
+  if (activePage === 'camera') {
+    return (
+      <PhotoGuidancePage
+        route={selectedRoute}
+        recommendation={recommendation}
+        cameraStatus={cameraStatus}
+        videoRef={videoRef}
+        canvasRef={canvasRef}
+        cameraDevices={cameraDevices}
+        selectedDeviceId={selectedDeviceId}
+        photoPreview={photoPreview}
+        photoAnalysis={photoAnalysis}
+        onDeviceChange={changeCameraDevice}
+        onStartCamera={() => startCamera(selectedDeviceId)}
+        onStopCamera={stopCamera}
+        onCapturePhoto={capturePhoto}
+        onBack={() => navigateTo('routes')}
+      />
+    );
+  }
 
   return (
     <main className="app-shell">
-      <section className="topbar" aria-label="앱 요약">
-        <div className="brand-block">
-          <img src="/coolpath-mark.svg" alt="" className="brand-mark" />
-          <div>
-            <p className="eyebrow">Paris comfort routing MVP</p>
-            <h1>CoolPath AI</h1>
-            <p className="brand-line">날씨, 시간대, 도보 부담을 계산해 오늘의 이동 전략을 비교합니다.</p>
-          </div>
-        </div>
-        <div className="condition-strip" aria-label="현재 추천 요약">
-          <MetricPill icon={ThermometerSun} label="체감" value={`${recommendation.weatherModel.feelsLike}°C`} />
-          <MetricPill icon={Sun} label="햇빛" value={recommendation.timeSlot.sunLabel} />
-          <MetricPill icon={ShieldCheck} label="추천점수" value={`${recommendation.bestRoute.recommendationScore}점`} />
-        </div>
-      </section>
+      <div className="mobile-frame">
+        <MobileHeader activePage={activePage} onBack={() => navigateTo(activePage === 'plan' ? 'plan' : 'routes')} />
 
-      <section className="app-layout">
-        <ControlPanel
-          originId={originId}
-          destinationId={destinationId}
-          timeSlotId={timeSlotId}
-          modeId={modeId}
-          weather={weather}
-          onPlaceChange={selectPlace}
-          onTimeChange={setTimeSlotId}
-          onModeChange={setModeId}
-          onWeatherChange={updateWeather}
-          onWeatherPreset={(values) => setWeather(values)}
-          onDemoScenario={loadDemoScenario}
-          onLiveWeather={loadLiveWeather}
-          weatherApiState={weatherApiState}
-        />
+        {activePage === 'plan' && (
+          <PlanPage
+            originAddress={originAddress}
+            originAnchorId={originAnchorId}
+            selectedPlaceIds={selectedPlaceIds}
+            plannedPlaces={plannedPlaces}
+            durationId={durationId}
+            paceId={paceId}
+            weather={weather}
+            weatherApiState={weatherApiState}
+            recommendation={recommendation}
+            onOriginAddressChange={setOriginAddress}
+            onOriginAnchorChange={setOriginAnchorId}
+            onTogglePlace={togglePlace}
+            onDurationChange={setDurationId}
+            onPaceChange={setPaceId}
+            onGeneratePlan={generatePlan}
+          />
+        )}
 
-        <section className="visual-column" aria-label="경로 시각화와 비교">
-          <MapPanel
+        {activePage === 'routes' && (
+          <RouteSelectionPage
             places={parisPlaces}
-            origin={recommendation.origin}
-            destination={recommendation.destination}
-            route={selectedRoute}
-            routes={recommendation.routes}
+            plannedPlaces={plannedPlaces}
+            recommendation={recommendation}
+            selectedRoute={selectedRoute}
             onRouteSelect={setSelectedRouteId}
-            mapApiKey={googleMapKey}
+            onOpenPlan={() => navigateTo('plan')}
+            onExtra={() => navigateTo('extras')}
+            onStartCamera={() => startCamera(selectedDeviceId)}
           />
-          <RouteComparison
-            routes={recommendation.routes}
-            bestRouteId={recommendation.bestRoute.id}
-            selectedRouteId={selectedRouteId}
-            onRouteSelect={setSelectedRouteId}
+        )}
+
+        {activePage === 'extras' && (
+          <ExtraPage
+            recommendation={recommendation}
+            selectedRoute={selectedRoute}
+            plannedPlaces={plannedPlaces}
+            guideMessages={guideMessages}
+            guideInput={guideInput}
+            guideStatus={guideStatus}
+            onGuideInputChange={setGuideInput}
+            onAskGuide={askTravelGuide}
+            onBack={() => navigateTo('routes')}
+            onStartCamera={() => startCamera(selectedDeviceId)}
           />
-        </section>
+        )}
 
-        <InsightPanel
-          recommendation={recommendation}
-          selectedRoute={selectedRoute}
-          aiState={aiState}
-          onGenerateAi={generateAiExplanation}
-        />
-      </section>
-
-      <DataNotice />
-      <GuidanceLauncher onStart={startGuidance} />
-      {isHudOpen && (
-        <GuidanceHud
-          route={selectedRoute}
-          recommendation={recommendation}
-          cameraStatus={cameraStatus}
-          videoRef={videoRef}
-          onClose={stopGuidance}
-        />
-      )}
+        <BottomNavigation activePage={activePage} onNavigate={navigateTo} onCamera={() => startCamera(selectedDeviceId)} />
+      </div>
     </main>
+  );
+}
+
+function MobileHeader({ activePage, onBack }) {
+  const title =
+    activePage === 'routes' ? '경로 선택' : activePage === 'extras' ? '여행 가이드' : 'AI Plan';
+  const subtitle =
+    activePage === 'routes'
+      ? '지도에서 경로를 고르고 점수를 확인'
+      : activePage === 'extras'
+        ? '행선지와 사진 안내 질문'
+        : '저장한 장소로 최적 일정 생성';
+
+  return (
+    <header className="mobile-header">
+      <button type="button" className="icon-button" onClick={onBack} aria-label="뒤로">
+        <ArrowLeft size={20} aria-hidden="true" />
+      </button>
+      <div>
+        <h1>{title}</h1>
+        <p>{subtitle}</p>
+      </div>
+    </header>
+  );
+}
+
+function SectionTitle({ icon: Icon, title, caption }) {
+  return (
+    <div className="section-title">
+      <Icon size={18} aria-hidden="true" />
+      <div>
+        <h2>{title}</h2>
+        {caption && <p>{caption}</p>}
+      </div>
+    </div>
   );
 }
 
 function MetricPill({ icon: Icon, label, value }) {
   return (
-    <div className="metric-pill">
-      <Icon size={17} aria-hidden="true" />
+    <span className="metric-pill">
+      <Icon size={15} aria-hidden="true" />
       <span>{label}</span>
       <strong>{value}</strong>
-    </div>
+    </span>
   );
 }
 
-function ControlPanel({
-  originId,
-  destinationId,
-  timeSlotId,
-  modeId,
+function PlanPage({
+  originAddress,
+  originAnchorId,
+  selectedPlaceIds,
+  plannedPlaces,
+  durationId,
+  paceId,
   weather,
-  onPlaceChange,
-  onTimeChange,
-  onModeChange,
-  onWeatherChange,
-  onWeatherPreset,
-  onDemoScenario,
-  onLiveWeather,
   weatherApiState,
+  recommendation,
+  onOriginAddressChange,
+  onOriginAnchorChange,
+  onTogglePlace,
+  onDurationChange,
+  onPaceChange,
+  onGeneratePlan,
 }) {
   return (
-    <aside className="control-panel" aria-label="경로 조건 입력">
-      <div className="panel-action-row">
-        <SectionTitle icon={Route} title="여행지 선택" />
-        <button type="button" className="ghost-button" onClick={onDemoScenario}>
-          폭염 시연값
-        </button>
+    <section className="screen plan-screen">
+      <div className="plan-callout">
+        <Sparkles size={17} aria-hidden="true" />
+        <p>My Place List의 장소를 기반으로 AI가 쾌적한 루트와 일정을 만듭니다.</p>
       </div>
-      <div className="field-grid">
-        <label className="field">
-          <span>출발지</span>
-          <select value={originId} onChange={(event) => onPlaceChange('origin', event.target.value)}>
-            {parisPlaces.map((place) => (
-              <option key={place.id} value={place.id} disabled={place.id === destinationId}>
+
+      <section className="content-block">
+        <SectionTitle icon={ListChecks} title={`AI가 사용할 저장 장소 (${plannedPlaces.length})`} />
+        <div className="selected-place-row">
+          {plannedPlaces.map((place) => {
+            const meta = getPlaceMeta(place.id);
+            const Icon = meta.icon;
+            return (
+              <span key={place.id} className="selected-place-chip">
+                <Icon size={13} aria-hidden="true" />
                 {place.name}
+              </span>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="input-stack" aria-label="여행 기본 정보">
+        <label className="field-row">
+          <span>여행 도시</span>
+          <span className="static-input">
+            <MapPin size={16} aria-hidden="true" />
+            Paris
+          </span>
+        </label>
+        <label className="field-row">
+          <span>내 출발지</span>
+          <input
+            type="text"
+            value={originAddress}
+            onChange={(event) => onOriginAddressChange(event.target.value)}
+            placeholder="출발지 주소 입력"
+          />
+        </label>
+        <label className="field-row compact-field">
+          <span>지도 기준</span>
+          <select value={originAnchorId} onChange={(event) => onOriginAnchorChange(event.target.value)}>
+            {parisPlaces.map((place) => (
+              <option key={place.id} value={place.id}>
+                {place.name} · {place.area}
               </option>
             ))}
           </select>
         </label>
-        <label className="field">
-          <span>도착지</span>
-          <select value={destinationId} onChange={(event) => onPlaceChange('destination', event.target.value)}>
-            {parisPlaces.map((place) => (
-              <option key={place.id} value={place.id} disabled={place.id === originId}>
-                {place.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
+      </section>
 
-      <div className="place-chip-grid" aria-label="주요 여행지 빠른 선택">
-        {parisPlaces.slice(0, 8).map((place) => (
-          <button
-            type="button"
-            key={place.id}
-            className={place.id === destinationId ? 'place-chip is-active' : 'place-chip'}
-            onClick={() => onPlaceChange('destination', place.id)}
-            disabled={place.id === originId}
-          >
-            <MapPin size={14} aria-hidden="true" />
-            <span>{place.shortName}</span>
-          </button>
-        ))}
-      </div>
-
-      <SectionTitle icon={Clock3} title="시간대" />
-      <div className="segmented-grid">
-        {timeSlots.map((slot) => (
-          <button
-            type="button"
-            key={slot.id}
-            className={slot.id === timeSlotId ? 'segment is-active' : 'segment'}
-            onClick={() => onTimeChange(slot.id)}
-          >
-            {slot.label}
-          </button>
-        ))}
-      </div>
-
-      <SectionTitle icon={ThermometerSun} title="날씨 조건" />
-      <div className="preset-row" aria-label="날씨 프리셋">
-        {weatherPresets.map((preset) => (
-          <button type="button" key={preset.id} className="preset-button" onClick={() => onWeatherPreset(preset.values)}>
-            {preset.label}
-          </button>
-        ))}
-      </div>
-      <button
-        type="button"
-        className="api-button"
-        onClick={onLiveWeather}
-        disabled={weatherApiState.status === 'loading'}
-      >
-        {weatherApiState.status === 'loading' ? '날씨 불러오는 중' : 'API 날씨 불러오기'}
-      </button>
-      <p className={`api-status is-${weatherApiState.status}`}>{weatherApiState.message}</p>
-      <div className="weather-stack">
-        <WeatherInput
-          icon={ThermometerSun}
-          label="기온"
-          unit="°C"
-          value={weather.temperature}
-          min="15"
-          max="42"
-          step="1"
-          onChange={(value) => onWeatherChange('temperature', value)}
-        />
-        <WeatherInput
-          icon={Droplets}
-          label="습도"
-          unit="%"
-          value={weather.humidity}
-          min="20"
-          max="95"
-          step="1"
-          onChange={(value) => onWeatherChange('humidity', value)}
-        />
-        <WeatherInput
-          icon={Wind}
-          label="풍속"
-          unit="m/s"
-          value={weather.wind}
-          min="0"
-          max="14"
-          step="0.1"
-          onChange={(value) => onWeatherChange('wind', value)}
-        />
-      </div>
-
-      <SectionTitle icon={ShieldCheck} title="추천 기준" />
-      <div className="mode-stack">
-        {userModes.map((mode) => {
-          const Icon = modeIcons[mode.id];
-          return (
+      <section className="control-section">
+        <SectionTitle icon={CalendarDays} title="여행 기간" />
+        <div className="duration-grid">
+          {durationOptions.map((duration) => (
             <button
               type="button"
-              key={mode.id}
-              className={mode.id === modeId ? 'mode-button is-active' : 'mode-button'}
-              onClick={() => onModeChange(mode.id)}
+              key={duration.id}
+              className={duration.id === durationId ? 'pill-option is-active' : 'pill-option'}
+              onClick={() => onDurationChange(duration.id)}
             >
-              <Icon size={18} aria-hidden="true" />
-              <span>
-                <strong>{mode.label}</strong>
-                <small>{mode.description}</small>
-              </span>
+              {duration.label}
             </button>
-          );
-        })}
+          ))}
+        </div>
+      </section>
+
+      <section className="control-section">
+        <SectionTitle icon={Compass} title="여행 페이스" />
+        <div className="pace-grid">
+          {paceOptions.map((pace) => {
+            const Icon = pace.icon;
+            return (
+              <button
+                type="button"
+                key={pace.id}
+                className={pace.id === paceId ? 'pace-option is-active' : 'pace-option'}
+                onClick={() => onPaceChange(pace.id)}
+              >
+                <Icon size={20} aria-hidden="true" />
+                <strong>{pace.label}</strong>
+                <span>{pace.caption}</span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="control-section">
+        <SectionTitle icon={MapPin} title="장소 온오프" caption="켜진 장소만 이번 AI 플랜에 사용합니다." />
+        <div className="place-toggle-list">
+          {parisPlaces.map((place) => {
+            const enabled = selectedPlaceIds.includes(place.id);
+            const meta = getPlaceMeta(place.id);
+            const Icon = meta.icon;
+            return (
+              <button
+                type="button"
+                key={place.id}
+                className={enabled ? 'place-toggle is-on' : 'place-toggle'}
+                onClick={() => onTogglePlace(place.id)}
+                aria-pressed={enabled}
+              >
+                <Icon size={17} aria-hidden="true" />
+                <span>
+                  <strong>{place.name}</strong>
+                  <small>{meta.badge}</small>
+                </span>
+                <i>{enabled && <Check size={14} aria-hidden="true" />}</i>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="weather-strip" aria-label="자동 날씨 상태">
+        <MetricPill icon={ThermometerSun} label="기온" value={`${weather.temperature}°C`} />
+        <MetricPill icon={Droplets} label="습도" value={`${weather.humidity}%`} />
+        <MetricPill icon={Wind} label="풍속" value={`${weather.wind}m/s`} />
+        <p className={`api-status is-${weatherApiState.status}`}>{weatherApiState.message}</p>
+      </section>
+
+      <button type="button" className="primary-cta" onClick={onGeneratePlan}>
+        <Sparkles size={19} aria-hidden="true" />
+        {plannedPlaces.length}개 장소로 AI 플랜 생성
+      </button>
+
+      <div className="next-route-peek">
+        <span>현재 예상 추천</span>
+        <strong>{recommendation.bestRoute.name}</strong>
+        <small>
+          {formatMinutes(recommendation.bestRoute.minutes)} · 추천 {recommendation.bestRoute.recommendationScore}점
+        </small>
       </div>
-    </aside>
+    </section>
   );
 }
 
-function SectionTitle({ icon: Icon, title }) {
+function RouteSelectionPage({ places, plannedPlaces, recommendation, selectedRoute, onRouteSelect, onOpenPlan, onExtra, onStartCamera }) {
   return (
-    <div className="section-title">
-      <Icon size={18} aria-hidden="true" />
-      <h2>{title}</h2>
-    </div>
-  );
-}
+    <section className="screen route-screen">
+      <MapPanel
+        places={places}
+        origin={recommendation.origin}
+        destination={recommendation.destination}
+        route={selectedRoute}
+        routes={recommendation.routes}
+        onRouteSelect={onRouteSelect}
+      />
 
-function WeatherInput({ icon: Icon, label, unit, value, min, max, step, onChange }) {
-  return (
-    <label className="weather-input">
-      <span className="weather-label">
-        <Icon size={17} aria-hidden="true" />
-        {label}
-      </span>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(event) => onChange(event.target.value)} />
-      <span className="number-box">
-        <input
-          type="number"
-          min={min}
-          max={max}
-          step={step}
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          aria-label={`${label} ${unit}`}
-        />
-        <em>{unit}</em>
-      </span>
-    </label>
+      <section className="route-sheet">
+        <div className="route-score-row">
+          <span className="score-token">
+            <strong>{selectedRoute.recommendationScore}</strong>
+            <small>추천점수</small>
+          </span>
+          <div>
+            <p className="eyebrow">선택한 경로</p>
+            <h2>{selectedRoute.name}</h2>
+            <p>{selectedRoute.summary}</p>
+          </div>
+        </div>
+
+        <div className="planned-strip" aria-label="AI 플랜 장소">
+          {plannedPlaces.map((place, index) => (
+            <span key={place.id} className={place.id === recommendation.destination.id ? 'plan-dot is-current' : 'plan-dot'}>
+              {index + 1}. {place.shortName}
+            </span>
+          ))}
+        </div>
+
+        <div className="action-grid">
+          <button type="button" className="secondary-action" onClick={onOpenPlan}>
+            <CalendarDays size={17} aria-hidden="true" />
+            Plan
+          </button>
+          <button type="button" className="secondary-action" onClick={onExtra}>
+            <MessagesSquare size={17} aria-hidden="true" />
+            가이드
+          </button>
+          <button type="button" className="primary-action" onClick={onStartCamera}>
+            <Camera size={17} aria-hidden="true" />
+            사진 안내
+          </button>
+        </div>
+      </section>
+    </section>
   );
 }
 
@@ -530,16 +818,16 @@ function canvasPointToLatLng(point) {
   return { lat, lng };
 }
 
-function buildGoogleStaticMapUrl({ origin, destination, route, mapApiKey }) {
-  const url = new URL('https://maps.googleapis.com/maps/api/staticmap');
-  url.searchParams.set('size', '760x480');
+function buildGoogleStaticMapUrl({ origin, destination, route }) {
+  const url = new URL('/api/static-map', window.location.origin);
+  url.searchParams.set('size', '760x760');
   url.searchParams.set('scale', '2');
   url.searchParams.set('maptype', 'roadmap');
   url.searchParams.set('language', 'ko');
   url.searchParams.set('center', `${(origin.lat + destination.lat) / 2},${(origin.lng + destination.lng) / 2}`);
   url.searchParams.set('zoom', '14');
   url.searchParams.append('style', 'feature:water|color:0xd8edf2');
-  url.searchParams.append('style', 'feature:landscape|color:0xf4f0e7');
+  url.searchParams.append('style', 'feature:landscape|color:0xf7f4ec');
   url.searchParams.append('style', 'feature:road|element:geometry|color:0xffffff');
   url.searchParams.append('style', 'feature:road|element:labels|visibility:simplified');
   url.searchParams.append('style', 'feature:poi|visibility:simplified');
@@ -550,46 +838,46 @@ function buildGoogleStaticMapUrl({ origin, destination, route, mapApiKey }) {
   url.searchParams.append('visible', `${origin.lat},${origin.lng}`);
   url.searchParams.append('visible', `${destination.lat},${destination.lng}`);
   url.searchParams.append('path', `color:0x${route.color.replace('#', '')}dd|weight:6|${pathPoints.join('|')}`);
-  url.searchParams.set('key', mapApiKey);
   return url.toString();
 }
 
-function MapPanel({ places, origin, destination, route, routes, onRouteSelect, mapApiKey }) {
+function MapPanel({ places, origin, destination, route, routes, onRouteSelect }) {
   const points = route.routePoints.map((point) => `${point.x},${point.y}`).join(' ');
-  const staticMapUrl = mapApiKey ? buildGoogleStaticMapUrl({ origin, destination, route, mapApiKey }) : '';
+  const staticMapUrl = buildGoogleStaticMapUrl({ origin, destination, route });
 
   return (
     <section className="map-panel" aria-label="지도형 경로 패널">
-      <div className="panel-heading">
+      <div className="map-heading">
         <div>
-          <p className="eyebrow">Mock Paris route map</p>
+          <p className="eyebrow">Route map</p>
           <h2>
-            {origin.name} <ArrowRight size={18} aria-hidden="true" /> {destination.name}
+            {origin.shortName} <ArrowRight size={16} aria-hidden="true" /> {destination.shortName}
           </h2>
         </div>
-        <div className="map-route-tabs">
-          {routes.map((candidate) => (
+      </div>
+
+      <div className="map-route-tabs" aria-label="지도 위 경로 선택">
+        {routes.map((candidate) => {
+          const Icon = getTransitIcon(candidate.type);
+          return (
             <button
               key={candidate.id}
               type="button"
               style={{ '--route-color': candidate.color }}
               className={candidate.id === route.id ? 'route-tab is-active' : 'route-tab'}
               onClick={() => onRouteSelect(candidate.id)}
-              title={`${candidate.name} 보기`}
             >
-              <span aria-hidden="true" />
-              {candidate.name}
+              <Icon size={14} aria-hidden="true" />
+              <span>{candidate.name}</span>
+              <strong>{candidate.recommendationScore}</strong>
             </button>
-          ))}
-        </div>
+          );
+        })}
       </div>
 
       <div className="map-canvas">
         {staticMapUrl && <img className="google-map-layer" src={staticMapUrl} alt="" />}
         <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-          <path className="seine" d="M5 61 C24 48, 35 66, 50 55 S78 48, 96 57" />
-          <path className="boulevard" d="M11 35 C28 31, 43 38, 56 30 S78 26, 92 35" />
-          <path className="boulevard thin" d="M18 83 C33 71, 52 79, 67 69 S82 57, 94 65" />
           <polyline className="route-shadow" points={points} />
           <polyline className="route-line" style={{ stroke: route.color }} points={points} />
           {route.routePoints.map((point, index) => (
@@ -600,7 +888,7 @@ function MapPanel({ places, origin, destination, route, routes, onRouteSelect, m
         </svg>
 
         {places.map((place) => {
-          const isEndpoint = place.id === origin.id || place.id === destination.id;
+          const isEndpoint = place.id === destination.sourceId || place.id === origin.sourceId || place.id === destination.id;
           return (
             <div
               key={place.id}
@@ -621,24 +909,10 @@ function MapPanel({ places, origin, destination, route, routes, onRouteSelect, m
         ))}
       </div>
 
-      <div className="map-step-list" aria-label="상세 경로 단계">
-        {route.segments.map((segment, index) => (
-          <div key={`${segment.label}-${index}`} className="map-step">
-            <span>{index + 1}</span>
-            <div>
-              <strong>{segment.label}</strong>
-              <small>
-                {segment.mode} · 약 {segment.km}km
-              </small>
-            </div>
-          </div>
-        ))}
-      </div>
-
       <div className="map-stats">
+        <StatBlock label="추천 점수" value={`${route.recommendationScore}점`} />
         <StatBlock label="예상 시간" value={formatMinutes(route.minutes)} />
-        <StatBlock label="도보 거리" value={`${route.walkingKm}km`} />
-        <StatBlock label="햇빛 노출" value={route.exposureLabel} />
+        <StatBlock label="보행 거리" value={`${route.walkingKm}km`} />
         <StatBlock label="그늘 보정" value={`${Math.round(route.shadePotential * 100)}%`} />
       </div>
     </section>
@@ -654,326 +928,229 @@ function StatBlock({ label, value }) {
   );
 }
 
-function RouteComparison({ routes, bestRouteId, selectedRouteId, onRouteSelect }) {
-  return (
-    <section className="comparison-panel" aria-label="후보 경로 비교">
-      <div className="panel-heading compact">
-        <SectionTitle icon={BarChart3} title="후보 경로 비교" />
-      </div>
-      <div className="route-card-grid">
-        {routes.map((route) => {
-          const Icon = getTransitIcon(route.type);
-          return (
-            <button
-              type="button"
-              key={route.id}
-              className={route.id === selectedRouteId ? 'route-card is-selected' : 'route-card'}
-              style={{ '--route-color': route.color }}
-              onClick={() => onRouteSelect(route.id)}
-            >
-              <span className="route-card-topline">
-                <Icon size={19} aria-hidden="true" />
-                <strong>{route.name}</strong>
-                {route.id === bestRouteId && <em>추천</em>}
-                {!route.allowed && <em className="muted-badge">보조</em>}
-              </span>
-              <span className="route-card-summary">{route.summary}</span>
-              <span className="tag-row">
-                {route.tags.map((tag) => (
-                  <small key={tag}>{tag}</small>
-                ))}
-              </span>
-              <span className="route-metrics">
-                <span>
-                  Comfort
-                  <b>{route.comfortScore}</b>
-                </span>
-                <span>
-                  시간
-                  <b>{formatMinutes(route.minutes)}</b>
-                </span>
-                <span>
-                  도보
-                  <b>{route.walkingKm}km</b>
-                </span>
-                <span>
-                  노출
-                  <b>{route.exposureLabel}</b>
-                </span>
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
-function InsightPanel({ recommendation, selectedRoute, aiState, onGenerateAi }) {
-  const { bestRoute, narrative, weatherModel, mode } = recommendation;
-  const route = selectedRoute ?? bestRoute;
+function ExtraPage({
+  recommendation,
+  selectedRoute,
+  plannedPlaces,
+  guideMessages,
+  guideInput,
+  guideStatus,
+  onGuideInputChange,
+  onAskGuide,
+  onBack,
+  onStartCamera,
+}) {
+  const destinationMeta = getPlaceMeta(recommendation.destination.id);
 
   return (
-    <aside className="insight-panel" aria-label="추천 결과">
-      <SectionTitle icon={Sparkles} title="AI 추천 결과" />
-      <div className="result-card">
-        <span className="score-ring" style={{ '--score-angle': `${route.comfortScore * 3.6}deg` }}>
-          <strong>{route.comfortScore}</strong>
-          <small>Comfort</small>
-        </span>
+    <section className="screen guide-screen">
+      <section className="guide-context">
         <div>
-          <p className="result-label">{route.id === bestRoute.id ? '최종 추천 경로' : '선택한 후보 경로'}</p>
-          <h2>{route.name}</h2>
-          <p>{route.type}</p>
+          <p className="eyebrow">Travel guide</p>
+          <h2>{recommendation.destination.name}</h2>
+          <p>{destinationMeta.note}</p>
         </div>
+        <div className="guide-metrics">
+          <MetricPill icon={ThermometerSun} label="체감" value={`${recommendation.weatherModel.feelsLike}°C`} />
+          <MetricPill icon={ShieldCheck} label="경로" value={`${selectedRoute.recommendationScore}점`} />
+        </div>
+      </section>
+
+      <div className="guide-suggestions">
+        {guideSuggestions.map((question) => (
+          <button type="button" key={question} onClick={() => onAskGuide(question)}>
+            {question}
+          </button>
+        ))}
       </div>
 
-      <div className="ai-copy">
-        <h3>{route.id === bestRoute.id ? narrative.title : `${route.name} 상세 분석`}</h3>
-        <p>{route.id === bestRoute.id ? narrative.body : route.summary}</p>
-        <p>{route.id === bestRoute.id ? narrative.tradeoff : `${route.name}은 ${formatMinutes(route.minutes)}, 도보 ${route.walkingKm}km로 계산되었습니다.`}</p>
-        <p>{route.id === bestRoute.id ? narrative.comfortNote : `현재 ${mode.label} 기준 추천 점수는 ${route.recommendationScore}점입니다.`}</p>
-        {route.id === bestRoute.id && narrative.excludedNote && <p>{narrative.excludedNote}</p>}
-      </div>
+      <section className="chat-panel" aria-label="여행 가이드 채팅">
+        <div className="chat-list">
+          {guideMessages.map((message) => (
+            <div key={message.id} className={message.role === 'user' ? 'chat-message is-user' : 'chat-message'}>
+              <span className="chat-avatar">{message.role === 'user' ? <User size={15} /> : <Bot size={15} />}</span>
+              <p>{message.text}</p>
+            </div>
+          ))}
+          {guideStatus === 'loading' && (
+            <div className="chat-message">
+              <span className="chat-avatar">
+                <Bot size={15} />
+              </span>
+              <p>여행 가이드 답변을 작성 중입니다.</p>
+            </div>
+          )}
+        </div>
 
-      <div className="live-ai-box">
-        <button
-          type="button"
-          className="api-button"
-          onClick={onGenerateAi}
-          disabled={aiState.status === 'loading'}
+        <form
+          className="guide-composer"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onAskGuide();
+          }}
         >
-          {aiState.status === 'loading' ? 'OpenAI 생성 중' : 'OpenAI 설명 생성'}
-        </button>
-        {aiState.message && <p className={`api-status is-${aiState.status}`}>{aiState.message}</p>}
-        {aiState.text && (
-          <div className="openai-copy">
-            <strong>{aiState.source}</strong>
-            <p>{aiState.text}</p>
-          </div>
-        )}
-      </div>
+          <input
+            type="text"
+            value={guideInput}
+            onChange={(event) => onGuideInputChange(event.target.value)}
+            placeholder="행선지, 정류장, 사진 안내 질문"
+          />
+          <button type="submit" aria-label="질문 보내기" disabled={guideStatus === 'loading'}>
+            <Send size={18} aria-hidden="true" />
+          </button>
+        </form>
+      </section>
 
-      <ScoreComponents route={route} />
-
-      <div className="breakdown-list">
-        <BreakdownRow label="직사광선 노출 감점" value={route.breakdown.sunPenalty} tone="danger" />
-        <BreakdownRow label="도보거리 감점" value={route.breakdown.walkingPenalty} tone="danger" />
-        <BreakdownRow label="환승/대기 감점" value={route.breakdown.transferPenalty} tone="warning" />
-        <BreakdownRow label="혼잡 감점" value={route.breakdown.crowdPenalty} tone="warning" />
-        <BreakdownRow label="그늘/대중교통 보너스" value={route.breakdown.shadeBonus} tone="good" />
-      </div>
-
-      <div className="context-box">
-        <Info size={18} aria-hidden="true" />
-        <p>
-          현재 입력값 기준 체감 {weatherModel.feelsLike}°C, 상태는 {weatherModel.conditionLabel}입니다. {mode.label} 가중치로 Comfort Score와
-          속도 점수를 합산해 추천 순위를 정했습니다.
-        </p>
-      </div>
-    </aside>
-  );
-}
-
-function ScoreComponents({ route }) {
-  const rows = [
-    ['더위', route.heatScore],
-    ['햇빛', route.sunScore],
-    ['이동부담', route.mobilityScore],
-    ['공간환경', route.environmentScore],
-  ];
-
-  return (
-    <div className="component-grid">
-      {rows.map(([label, value]) => (
-        <div key={label} className="component-cell">
-          <span>{label}</span>
-          <strong>{value}</strong>
+      <section className="guide-route-card">
+        <SectionTitle icon={Route} title="선택 경로 요약" />
+        <div className="step-list">
+          {selectedRoute.segments.slice(0, 4).map((segment, index) => (
+            <div key={`${segment.label}-${index}`} className="map-step">
+              <span>{index + 1}</span>
+              <div>
+                <strong>{segment.label}</strong>
+                <small>
+                  {segment.mode} · 약 {segment.km}km
+                </small>
+              </div>
+            </div>
+          ))}
         </div>
-      ))}
-    </div>
-  );
-}
+        <div className="planned-strip">
+          {plannedPlaces.map((place, index) => (
+            <span key={place.id} className={place.id === recommendation.destination.id ? 'plan-dot is-current' : 'plan-dot'}>
+              {index + 1}. {place.shortName}
+            </span>
+          ))}
+        </div>
+      </section>
 
-function BreakdownRow({ label, value, tone }) {
-  const capped = Math.min(Math.abs(value), 42);
-  return (
-    <div className="breakdown-row">
-      <span>{label}</span>
-      <div className="bar-track">
-        <i className={tone} style={{ width: `${(capped / 42) * 100}%` }} />
-      </div>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
-function DataNotice() {
-  return (
-    <section className="data-notice" aria-label="한계와 데이터 출처">
-      <div>
-        <SectionTitle icon={Info} title="MVP 범위" />
-        <p>
-          이 프로토타입은 실시간 교통·정밀 그림자·혼잡도 API 없이 동작합니다. 파리 주요 여행지 목업 좌표와 후보 경로를 기반으로 날씨,
-          시간대, 도보거리, 도로폭, 건물 밀도, 강가 여부를 규칙 기반 Comfort Score로 계산합니다.
-        </p>
-      </div>
-      <div className="source-grid">
-        <span>여행지: 파리 주요 명소 목업 좌표</span>
-        <span>날씨: 사용자가 입력한 시나리오 값</span>
-        <span>경로: 교체 가능한 후보 생성 엔진</span>
-        <span>확장: 지도·날씨·대중교통 API 연동</span>
+      <div className="action-grid">
+        <button type="button" className="secondary-action" onClick={onBack}>
+          <ArrowLeft size={17} aria-hidden="true" />
+          지도
+        </button>
+        <button type="button" className="primary-action" onClick={onStartCamera}>
+          <Camera size={17} aria-hidden="true" />
+          사진 안내
+        </button>
       </div>
     </section>
   );
 }
 
-function GuidanceLauncher({ onStart }) {
-  return (
-    <button type="button" className="guidance-launcher" onClick={onStart} aria-label="HUD 길안내 시작">
-      <Camera size={20} aria-hidden="true" />
-      <span>길안내 시작</span>
-    </button>
-  );
-}
-
-function GuidanceHud({ route, recommendation, cameraStatus, videoRef, onClose }) {
-  const points = route.routePoints.map((point) => `${point.x},${point.y}`).join(' ');
-  const nextStep = getHudInstruction(route);
+function PhotoGuidancePage({
+  route,
+  recommendation,
+  cameraStatus,
+  videoRef,
+  canvasRef,
+  cameraDevices,
+  selectedDeviceId,
+  photoPreview,
+  photoAnalysis,
+  onDeviceChange,
+  onStartCamera,
+  onStopCamera,
+  onCapturePhoto,
+  onBack,
+}) {
   const cameraLabel =
-    cameraStatus === 'live'
-      ? '실시간 카메라'
-      : cameraStatus === 'loading'
-        ? '카메라 연결 중'
-        : '목업 카메라 HUD';
+    cameraStatus === 'live' ? '카메라 연결됨' : cameraStatus === 'loading' ? '카메라 연결 중' : cameraStatus === 'mock' ? '데모 분석 모드' : '카메라 대기';
 
   return (
-    <section className="hud-overlay" aria-label="실감형 길안내 HUD">
-      <div className="hud-camera-layer">
-        {cameraStatus === 'live' && <video ref={videoRef} className="hud-video" autoPlay muted playsInline />}
-        {cameraStatus !== 'live' && (
-          <div className={cameraStatus === 'loading' ? 'hud-mock-camera is-loading' : 'hud-mock-camera'}>
-            <span className="street-line line-left" />
-            <span className="street-line line-right" />
-            <span className="street-building building-left" />
-            <span className="street-building building-right" />
-            <span className="street-skyline" />
-          </div>
-        )}
-      </div>
-
-      <div className="hud-vignette" />
-
-      <header className="hud-header">
-        <div>
-          <p className="eyebrow">Immersive guidance mode</p>
-          <h2>
-            {recommendation.origin.shortName} <ArrowRight size={17} aria-hidden="true" /> {recommendation.destination.shortName}
-          </h2>
-        </div>
-        <button type="button" className="hud-close" onClick={onClose} aria-label="HUD 닫기">
-          <X size={22} aria-hidden="true" />
+    <main className="photo-page" aria-label="사진 기반 길안내">
+      <header className="photo-header">
+        <button type="button" className="icon-button dark" onClick={onBack} aria-label="경로 선택으로 돌아가기">
+          <X size={21} aria-hidden="true" />
         </button>
+        <div>
+          <p>{cameraLabel}</p>
+          <h1>
+            {recommendation.origin.shortName} <ArrowRight size={16} aria-hidden="true" /> {recommendation.destination.shortName}
+          </h1>
+        </div>
       </header>
 
-      <div className="hud-status-strip">
-        <HudChip icon={Camera} label={cameraLabel} />
-        <HudChip icon={ThermometerSun} label={`체감 ${recommendation.weatherModel.feelsLike}°C`} />
-        <HudChip icon={ShieldCheck} label={`${route.grade} · ${route.comfortScore}점`} />
-      </div>
+      <section className="camera-stage">
+        {cameraStatus === 'live' && <video ref={videoRef} className="camera-video" autoPlay muted playsInline />}
+        {cameraStatus !== 'live' && (
+          <div className={cameraStatus === 'loading' ? 'camera-placeholder is-loading' : 'camera-placeholder'}>
+            <Camera size={46} aria-hidden="true" />
+            <strong>{cameraStatus === 'loading' ? '카메라를 여는 중' : '표지판 사진 안내'}</strong>
+            <span>정류장, 지하철 입구, 방향 표지를 찍어 확인합니다.</span>
+          </div>
+        )}
+        <canvas ref={canvasRef} hidden />
+      </section>
 
-      <div className="hud-center-guide">
-        <div className="hud-arrow-ring">
-          <ChevronUp size={86} aria-hidden="true" />
-        </div>
-        <div className="hud-step-card">
-          <span>{nextStep.kicker}</span>
-          <strong>{nextStep.title}</strong>
-          <p>{nextStep.detail}</p>
-        </div>
-      </div>
+      <section className="camera-tools">
+        <label className="camera-select">
+          <Laptop size={15} aria-hidden="true" />
+          <select value={selectedDeviceId} onChange={(event) => onDeviceChange(event.target.value)} aria-label="카메라 선택">
+            <option value="">자동 선택</option>
+            {cameraDevices.map((device, index) => (
+              <option key={device.deviceId || index} value={device.deviceId}>
+                {device.label || `카메라 ${index + 1}`}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button type="button" className="secondary-action dark" onClick={cameraStatus === 'live' ? onStopCamera : onStartCamera}>
+          {cameraStatus === 'live' ? '카메라 끄기' : '카메라 켜기'}
+        </button>
+        <button type="button" className="primary-action" onClick={onCapturePhoto}>
+          <Image size={17} aria-hidden="true" />
+          사진 분석
+        </button>
+      </section>
 
-      <aside className="hud-mini-map" aria-label="HUD 미니맵">
-        <div className="hud-map-title">
-          <Map size={17} aria-hidden="true" />
-          <strong>{route.name}</strong>
-        </div>
-        <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-          <path className="hud-river" d="M5 61 C24 48, 35 66, 50 55 S78 48, 96 57" />
-          <polyline className="hud-route-line" style={{ stroke: route.color }} points={points} />
-          {route.routePoints.map((point, index) => (
-            <circle
-              key={`${point.label}-${index}`}
-              cx={point.x}
-              cy={point.y}
-              r={index === 0 || index === route.routePoints.length - 1 ? 3 : 2.2}
-            />
-          ))}
-        </svg>
-        <div className="hud-map-metrics">
-          <span>{formatMinutes(route.minutes)}</span>
-          <span>{route.walkingKm}km 도보</span>
-        </div>
-      </aside>
-
-      <footer className="hud-footer">
+      <section className="photo-analysis">
+        {photoPreview && <img src={photoPreview} alt="촬영한 주변 사진" />}
         <div>
-          <Compass size={18} aria-hidden="true" />
-          <span>{route.summary}</span>
+          <p className="eyebrow">Navigation check</p>
+          <h2>{(photoAnalysis ?? buildPhotoAnalysis(route, recommendation.destination)).title}</h2>
+          <p>{(photoAnalysis ?? buildPhotoAnalysis(route, recommendation.destination)).body}</p>
+          <div className="check-list">
+            {(photoAnalysis ?? buildPhotoAnalysis(route, recommendation.destination)).checks.map((item) => (
+              <span key={item}>
+                <Check size={14} aria-hidden="true" />
+                {item}
+              </span>
+            ))}
+          </div>
         </div>
-        <small>프로토타입 HUD: 실제 경로 추적 대신 선택된 후보 경로의 다음 행동을 시각화합니다.</small>
+      </section>
+
+      <footer className="photo-footer">
+        <Compass size={18} aria-hidden="true" />
+        <span>{route.summary}</span>
       </footer>
-    </section>
+    </main>
   );
 }
 
-function HudChip({ icon: Icon, label }) {
+function BottomNavigation({ activePage, onNavigate, onCamera }) {
   return (
-    <span className="hud-chip">
-      <Icon size={16} aria-hidden="true" />
-      {label}
-    </span>
+    <nav className="bottom-nav" aria-label="앱 하단 탐색">
+      <button type="button" className={activePage === 'plan' ? 'is-active' : ''} onClick={() => onNavigate('plan')}>
+        <Home size={20} aria-hidden="true" />
+        <span>Plan</span>
+      </button>
+      <button type="button" className={activePage === 'routes' ? 'is-active' : ''} onClick={() => onNavigate('routes')}>
+        <Map size={20} aria-hidden="true" />
+        <span>지도</span>
+      </button>
+      <button type="button" className={activePage === 'extras' ? 'is-active' : ''} onClick={() => onNavigate('extras')}>
+        <MessagesSquare size={20} aria-hidden="true" />
+        <span>가이드</span>
+      </button>
+      <button type="button" onClick={onCamera}>
+        <Camera size={20} aria-hidden="true" />
+        <span>사진</span>
+      </button>
+    </nav>
   );
-}
-
-function getHudInstruction(route) {
-  if (route.id === 'metro') {
-    return {
-      kicker: '120m 앞',
-      title: 'Metro 진입 방향으로 이동',
-      detail: '도보 노출을 줄이기 위해 가장 가까운 지하철 진입 지점까지 직진하세요.',
-    };
-  }
-
-  if (route.id === 'bus') {
-    return {
-      kicker: '90m 앞',
-      title: '버스 정류장 쪽으로 이동',
-      detail: '현재 더위 조건에서는 대기 시간이 있어도 도보 부담을 줄이는 전략입니다.',
-    };
-  }
-
-  if (route.id === 'riverside') {
-    return {
-      kicker: '다음 구간',
-      title: '세느강 방향으로 우회',
-      detail: '강가의 개방감과 바람 가능성을 활용해 체감 쾌적도를 높입니다.',
-    };
-  }
-
-  if (route.id === 'shade') {
-    return {
-      kicker: '150m 앞',
-      title: '그늘 골목으로 진입',
-      detail: '건물 밀도가 높은 구간을 따라 직사광선 노출을 줄입니다.',
-    };
-  }
-
-  return {
-    kicker: '현재 방향',
-    title: '목적지 방향으로 계속 직진',
-    detail: '가장 빠른 후보이지만 더운 시간대에는 햇빛 노출에 주의하세요.',
-  };
 }
 
 export default App;
