@@ -30,6 +30,7 @@ OPENAI_API_KEY=
 OPENAI_MODEL=gpt-5.5
 OPENAI_REASONING_EFFORT=low
 OPENAI_TEXT_VERBOSITY=low
+COOLPATH_ACCESS_TOKEN=
 ```
 
 ## 배포 후 확인할 URL
@@ -41,6 +42,20 @@ https://배포도메인.vercel.app/#extras
 https://배포도메인.vercel.app/#trips
 https://배포도메인.vercel.app/#camera
 ```
+
+## 접근 제한
+
+공개 URL을 바로 열 수 없도록 Vercel Routing Middleware가 적용되어 있다.
+Vercel 환경변수 `COOLPATH_ACCESS_TOKEN`에는 사람이 외우는 비밀번호가 아니라 24자 이상의 랜덤 토큰을 넣는다.
+
+팀원에게는 아래 형태의 접근 링크를 공유한다.
+
+```text
+https://배포도메인.vercel.app/?access=COOLPATH_ACCESS_TOKEN에_넣은_값
+```
+
+처음 한 번 이 링크로 접속하면 7일짜리 보안 쿠키가 발급되고, 이후에는 일반 배포 URL로도 접속할 수 있다.
+토큰이 유출되면 Vercel 환경변수 값을 바꾼 뒤 Redeploy한다.
 
 ## 배포 후 필수 확인
 
