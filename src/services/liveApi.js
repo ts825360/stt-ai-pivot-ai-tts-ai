@@ -9,6 +9,28 @@ export async function fetchLiveWeather(place) {
   return data;
 }
 
+export async function fetchPlaceGeocode(address) {
+  const response = await fetch(`/api/geocode?address=${encodeURIComponent(address)}`);
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error || 'Geocoding request failed.');
+  }
+
+  return data;
+}
+
+export async function fetchReverseGeocode({ lat, lng }) {
+  const response = await fetch(`/api/reverse-geocode?lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(lng)}`);
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error || 'Reverse geocoding request failed.');
+  }
+
+  return data;
+}
+
 export async function fetchAiRecommendation({ recommendation, selectedRoute }) {
   const payload = {
     origin: recommendation.origin.name,
@@ -57,7 +79,7 @@ export async function fetchAiRecommendation({ recommendation, selectedRoute }) {
   return data;
 }
 
-export async function fetchTravelGuideChat({ question, recommendation, selectedRoute, plannedPlaces }) {
+export async function fetchTravelGuideChat({ question, recommendation, selectedRoute, plannedPlaces, personalPreference }) {
   const payload = {
     question,
     destination: {
@@ -82,6 +104,7 @@ export async function fetchTravelGuideChat({ question, recommendation, selectedR
       name: place.name,
       area: place.area,
     })),
+    personalPreference: personalPreference || '',
   };
 
   const response = await fetch('/api/travel-guide', {
@@ -95,6 +118,44 @@ export async function fetchTravelGuideChat({ question, recommendation, selectedR
 
   if (!response.ok) {
     throw new Error(data.error || 'Travel guide request failed.');
+  }
+
+  return data;
+}
+
+export async function fetchPhotoGuideAnalysis({ imageDataUrl, recommendation, selectedRoute, locationState }) {
+  const payload = {
+    imageDataUrl,
+    destination: {
+      name: recommendation.destination.name,
+      area: recommendation.destination.area,
+    },
+    route: {
+      name: selectedRoute.name,
+      type: selectedRoute.type,
+      minutes: selectedRoute.minutes,
+      walkingKm: selectedRoute.walkingKm,
+      segments: selectedRoute.segments,
+    },
+    navigation: {
+      gpsStatus: locationState.status,
+      distanceMeters: locationState.distanceMeters,
+      bearing: locationState.bearing,
+      accuracy: locationState.accuracy,
+    },
+  };
+
+  const response = await fetch('/api/photo-guide', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error || 'Photo guide request failed.');
   }
 
   return data;

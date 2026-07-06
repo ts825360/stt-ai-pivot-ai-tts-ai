@@ -5,4 +5,5 @@ node_modules/
 dist/
 work/vite-dev*.log
 work/dev-server*.log
+work/*.log
 work/open-design/
