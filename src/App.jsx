@@ -161,6 +161,9 @@ function buildFriendlyRouteSummary(route) {
       ? '가장 빠른 후보입니다.'
       : `가장 빠른 후보보다 ${route.detourMinutes}분 더 걸리지만, 이동 부담을 줄일 수 있는 선택지입니다.`;
   const walkingText = `보행은 약 ${route.walkingKm}km, 예상 도보시간은 ${formatWalkingMinutes(route)}입니다.`;
+  const scoreText = route.scoreModel
+    ? `하루 환산부담은 ${route.scoreModel.dailyBurdenMinutes}분, 보행예산은 ${route.scoreModel.walkBudgetMinutes}분입니다.`
+    : '';
   const routeFocus =
     route.id === 'metro'
       ? '긴 구간은 지하철로 넘기고, 걷는 구간을 짧게 나눕니다.'
@@ -172,7 +175,7 @@ function buildFriendlyRouteSummary(route) {
             ? '강변 쪽으로 우회해 길을 이해하기 쉽게 잡습니다.'
             : '이동 부담이 낮은 후보를 우선합니다.';
 
-  return `${formatMinutes(route.minutes)} 경로입니다. ${detourText} ${walkingText} ${routeFocus}`;
+  return `${formatMinutes(route.minutes)} 경로입니다. ${detourText} ${walkingText} ${scoreText} ${routeFocus}`.replace(/\s+/g, ' ').trim();
 }
 
 function describeSegment(segment, index, segments) {
@@ -526,7 +529,7 @@ function applyScoreScenario(recommendation, scenarioId) {
       speedScore: demoScore,
       timeScore: demoScore,
       grade: demoAllowed ? '추천 가능' : '우회 큼',
-      summary: `이동시간 기준 ${demoScore}점입니다. ${scenarioReason}`,
+      summary: `하루 이동부담 기준 ${demoScore}점입니다. ${scenarioReason}`,
       reasons: [scenarioReason, ...route.reasons.filter((reason) => !reason.includes('발표 시연용'))].slice(0, 4),
     };
   });
@@ -944,8 +947,9 @@ function App() {
         timeSlotId: '14',
         modeId,
         places: parisPlaces,
+        plannedPlaceCount: plannedPlaces.length,
       }),
-    [originLocation, destination, weather, modeId],
+    [originLocation, destination, weather, modeId, plannedPlaces.length],
   );
   const recommendation = useMemo(
     () => applyScoreScenario(baseRecommendation, scoreScenarioId),
@@ -2605,7 +2609,7 @@ function PlanResultCard({
       <div className="route-score-row">
         <span className="score-token">
           <strong>{route.recommendationScore}</strong>
-          <small>시간점수</small>
+          <small>부담점수</small>
         </span>
         <div>
           <p className="eyebrow">생성된 AI 플랜</p>
@@ -3002,7 +3006,7 @@ function MapPanel({ places, origin, destination, route, mapZoom, onZoomChange })
       </div>
 
       <div className="map-stats">
-        <StatBlock label="추천 점수" value={`${route.recommendationScore}점`} />
+        <StatBlock label="부담 점수" value={`${route.recommendationScore}점`} />
         <StatBlock label="예상 시간" value={formatMinutes(route.minutes)} />
         <StatBlock label="도보 예상 시간" value={formatWalkingMinutes(route)} />
         <StatBlock label="보행 거리" value={`${route.walkingKm}km`} />

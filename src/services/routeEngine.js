@@ -34,6 +34,13 @@ const anchors = {
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 const clamp01 = (value) => clamp(value, 0, 1);
 const round = (value, precision = 0) => Number(value.toFixed(precision));
+const DAILY_WALK_BUDGET_MIN = 40;
+const TRANSIT_WALK_BONUS_MIN = 6.5;
+const WALK_BUDGET_CAP_BY_MODE = {
+  comfort: 60,
+  balanced: 70,
+  time: 85,
+};
 
 function findById(collection, id) {
   return collection.find((item) => item.id === id) ?? collection[0];
@@ -209,7 +216,9 @@ function createCandidateRoutes(origin, destination) {
           : round(pathKm, 1);
     const inVehicleMinutes = id === 'metro' ? pathKm * 3.25 : id === 'bus' ? pathKm * 4.9 : 0;
     const walkingMinutes = Math.round(walkMinutes(walkingKm));
-    const minutes = transitHeavy ? Math.round(walkingMinutes + inVehicleMinutes + waitMinutes + transfers * 3.5) : walkingMinutes;
+    const rideMinutes = Math.round(inVehicleMinutes);
+    const waitTransferMinutes = transitHeavy ? Math.round(waitMinutes + transfers * 3.5) : 0;
+    const minutes = transitHeavy ? Math.round(walkingMinutes + rideMinutes + waitTransferMinutes) : walkingMinutes;
     const shadeCover =
       id === 'shade'
         ? clamp(0.7 + avgShade * 0.16, 0.68, 0.9)
@@ -235,6 +244,8 @@ function createCandidateRoutes(origin, destination) {
       minutes,
       walkingKm: round(walkingKm, 1),
       walkingMinutes,
+      rideMinutes,
+      waitTransferMinutes,
       maxWalkingSegmentKm,
       roadWidthM,
       shadeCover,
@@ -282,11 +293,60 @@ function gradeScore(score) {
   return '비추천';
 }
 
-function scoreRoutes(routes, weather, timeSlot, mode) {
+function progressiveWalkPenalty(overageMinutes) {
+  if (overageMinutes <= 0) return 0;
+  if (overageMinutes <= 15) return overageMinutes;
+  if (overageMinutes <= 30) return 15 + 1.5 * (overageMinutes - 15);
+  return 37.5 + 2 * (overageMinutes - 30);
+}
+
+function calculateDailyScore(route, baselineTravelTimeMin, mode, plannedPlaceCount) {
+  const legCount = Math.max(1, Math.round(plannedPlaceCount || 1));
+  const transitLegCount = route.usesTransit ? legCount : 0;
+  const walkBudgetCap = WALK_BUDGET_CAP_BY_MODE[mode.id] ?? WALK_BUDGET_CAP_BY_MODE.balanced;
+  const walkBudgetMinutes = Math.min(walkBudgetCap, DAILY_WALK_BUDGET_MIN + transitLegCount * TRANSIT_WALK_BONUS_MIN);
+  const detourMinutes = Math.max(0, route.minutes - baselineTravelTimeMin);
+  const walkingTotalMinutes = route.walkingMinutes * legCount;
+  const rideTotalMinutes = route.rideMinutes * legCount;
+  const waitTransferTotalMinutes = route.waitTransferMinutes * legCount;
+  const detourTotalMinutes = detourMinutes * legCount;
+  const dailyBurdenMinutes =
+    walkingTotalMinutes * 1.0 + rideTotalMinutes * 0.5 + waitTransferTotalMinutes * 0.8 + detourTotalMinutes * 1.3;
+  const burdenOverBudgetMinutes = Math.max(0, dailyBurdenMinutes - walkBudgetMinutes);
+  const walkOverBudgetMinutes = Math.max(0, walkingTotalMinutes - walkBudgetMinutes);
+  const walkPenalty = progressiveWalkPenalty(walkOverBudgetMinutes);
+  const recommendationScore = clamp(Math.round(100 - burdenOverBudgetMinutes - walkPenalty), 0, 100);
+
+  return {
+    recommendationScore,
+    scoreModel: {
+      legCount,
+      transitLegCount,
+      walkBudgetMinutes: round(walkBudgetMinutes, 1),
+      dailyBurdenMinutes: round(dailyBurdenMinutes, 1),
+      walkingTotalMinutes: round(walkingTotalMinutes, 1),
+      rideTotalMinutes: round(rideTotalMinutes, 1),
+      waitTransferTotalMinutes: round(waitTransferTotalMinutes, 1),
+      detourTotalMinutes: round(detourTotalMinutes, 1),
+      burdenOverBudgetMinutes: round(burdenOverBudgetMinutes, 1),
+      walkOverBudgetMinutes: round(walkOverBudgetMinutes, 1),
+      walkPenalty: round(walkPenalty, 1),
+      weights: {
+        walking: 1,
+        ride: 0.5,
+        waitTransfer: 0.8,
+        detour: 1.3,
+      },
+    },
+  };
+}
+
+function scoreRoutes(routes, weather, timeSlot, mode, context = {}) {
   const weatherModel = modelWeather(weather, timeSlot);
   const baselineTravelTimeMin = Math.min(...routes.map((route) => route.minutes));
   const preferredWalkSegmentKm = 0.85;
   const maxPreferredWalkKm = 2.5;
+  const plannedPlaceCount = context.plannedPlaceCount ?? 1;
 
   return routes.map((route) => {
     const detourMinutes = route.minutes - baselineTravelTimeMin;
@@ -296,30 +356,26 @@ function scoreRoutes(routes, weather, timeSlot, mode) {
     const sunExposure = solarStress * exposedWalkRatio;
     const walkBurden = clamp01((route.walkingKm - preferredWalkSegmentKm) / (maxPreferredWalkKm - preferredWalkSegmentKm));
     const continuousWalkBurden = clamp01((route.maxWalkingSegmentKm - preferredWalkSegmentKm) / (maxPreferredWalkKm - preferredWalkSegmentKm));
-    const timeBurden = clamp01((route.minutes - baselineTravelTimeMin) / 20);
-    const timeScore = clamp(
-      Math.round(100 - timeBurden * 24 - walkBurden * 10 - continuousWalkBurden * 14),
-      0,
-      100,
-    );
-    const allowed = route.minutes <= baselineTravelTimeMin + 20;
+    const { recommendationScore, scoreModel } = calculateDailyScore(route, baselineTravelTimeMin, mode, plannedPlaceCount);
+    const allowed = recommendationScore >= 55;
     const transferPenalty = route.transfers * 3.6 + route.waitMinutes * 0.16;
     const crowdPenalty = route.crowdLevel * (4.2 + timeSlot.crowdBias);
     const walkingPenalty = round(walkBurden * (18 + weatherModel.heatStress * 20), 1);
     const sunPenalty = round(sunExposure * (18 + weatherModel.heatStress * 24), 1);
     const shadeBonus = round(shadePotential * 13 + route.restStopScore * 3 + (route.usesTransit ? 5 : 0) + (route.riverAdjacent ? weather.wind * 0.7 : 0), 1);
-    const recommendationScore = allowed ? timeScore : clamp(Math.round(timeScore - (detourMinutes - 20) * 2.4), 0, 100);
 
     const reasons = [];
     if (detourMinutes === 0) reasons.push('가장 빠른 이동시간을 기준점으로 삼았습니다.');
     if (route.usesTransit) reasons.push('대중교통을 포함해 도보가 여러 구간으로 분산됩니다.');
     if (route.maxWalkingSegmentKm <= preferredWalkSegmentKm) reasons.push('1회 보행 거리가 짧아 이동 부담이 낮습니다.');
     if (route.maxWalkingSegmentKm > maxPreferredWalkKm) reasons.push('한 번에 걷는 거리가 길어 보조 후보로 봅니다.');
+    if (scoreModel.walkingTotalMinutes > scoreModel.walkBudgetMinutes) reasons.push('하루 보행예산을 초과해 누진 도보 패널티를 적용했습니다.');
     if (route.shadeCover >= 0.66) reasons.push('그늘과 실내 대피 가능 구간이 있어 설명 문구에 반영합니다.');
     if (route.riverAdjacent) reasons.push('강변 이동 선호가 있을 때 선택 사유로 제시할 수 있습니다.');
     if (weatherModel.feelsLike >= 32) reasons.push('더운 날씨라 장시간 실외 보행을 주의 안내합니다.');
-    if (!allowed) reasons.push('가장 빠른 후보보다 우회 시간이 커 보조 후보로 표시합니다.');
-    if (reasons.length === 0) reasons.push('이동시간 기준으로 비교 가능한 후보입니다.');
+    if (detourMinutes > 20) reasons.push('최단 경로 대비 추가이동시간이 커 점수에서 강하게 감점됩니다.');
+    if (!allowed) reasons.push('하루 이동부담이 커 일정 조정 후보로 표시합니다.');
+    if (reasons.length === 0) reasons.push('하루 이동부담 기준으로 비교 가능한 후보입니다.');
 
     return {
       ...route,
@@ -328,20 +384,23 @@ function scoreRoutes(routes, weather, timeSlot, mode) {
       allowed,
       heatScore: Math.round(100 - weatherModel.heatStress * 52),
       sunScore: Math.round(100 - sunExposure * 72),
-      mobilityScore: timeScore,
+      mobilityScore: recommendationScore,
       environmentScore: Math.round(shadePotential * 100),
-      comfortScore: timeScore,
-      speedScore: timeScore,
-      timeScore,
+      comfortScore: recommendationScore,
+      speedScore: recommendationScore,
+      timeScore: recommendationScore,
       recommendationScore,
-      grade: allowed ? '추천 가능' : '우회 큼',
+      grade: gradeScore(recommendationScore),
       shadePotential: round(shadePotential, 2),
       exposureLabel: sunExposure > 0.68 ? '높음' : sunExposure > 0.42 ? '중간' : '낮음',
-      summary: `이동시간 기준 ${recommendationScore}점입니다. ${reasons.slice(0, 2).join(' ')}`,
+      summary: `하루 이동부담 기준 ${recommendationScore}점입니다. ${reasons.slice(0, 2).join(' ')}`,
+      scoreModel,
       reasons,
       breakdown: {
         sunPenalty,
         walkingPenalty,
+        dailyBurdenPenalty: round(scoreModel.burdenOverBudgetMinutes, 1),
+        walkOverBudgetPenalty: round(scoreModel.walkPenalty, 1),
         transferPenalty: round(transferPenalty, 1),
         crowdPenalty: round(crowdPenalty, 1),
         shadeBonus,
@@ -359,7 +418,7 @@ function buildNarrative(bestRoute, routes, context) {
       : context.weatherModel.feelsLike >= 32
         ? '현재 체감 더위가 높아 세부 안내에서 그늘과 실내 대피 지점을 함께 설명합니다'
         : '현재 날씨는 추천 사유와 현장 안내에 보조 정보로 사용합니다';
-  const modePhrase = '추천점수는 가장 빠른 경로 대비 추가시간과 보행 부담을 중심으로 계산합니다.';
+  const modePhrase = '추천점수는 도보, 탑승, 대기/환승, 최단 대비 추가시간을 하루 이동부담으로 환산해 계산합니다.';
   const tradeoff =
     fastest.id !== bestRoute.id
       ? `${fastest.name}보다 ${bestRoute.detourMinutes}분 더 걸리지만 보행 ${bestRoute.walkingKm}km, 예상 도보 ${bestRoute.walkingMinutes}분으로 비교할 수 있습니다.`
@@ -370,20 +429,20 @@ function buildNarrative(bestRoute, routes, context) {
 
   return {
     title: `${bestRoute.name}을 추천합니다`,
-    body: `${heatPhrase}. ${modePhrase} ${bestRoute.name}은 총 ${bestRoute.minutes}분, 최단 대비 +${bestRoute.detourMinutes}분, 보행 ${bestRoute.walkingKm}km, 예상 도보 ${bestRoute.walkingMinutes}분입니다.`,
+    body: `${heatPhrase}. ${modePhrase} ${bestRoute.name}은 하루 환산부담 ${bestRoute.scoreModel.dailyBurdenMinutes}분, 보행예산 ${bestRoute.scoreModel.walkBudgetMinutes}분, 보행 ${bestRoute.walkingKm}km입니다.`,
     tradeoff,
     comfortNote,
     excludedNote,
   };
 }
 
-export function buildRouteRecommendation({ origin, originId, destination, destinationId, weather, timeSlotId, modeId, places }) {
+export function buildRouteRecommendation({ origin, originId, destination, destinationId, weather, timeSlotId, modeId, places, plannedPlaceCount = 1 }) {
   const selectedOrigin = origin ?? findById(places, originId);
   const selectedDestination = destination ?? findById(places, destinationId);
   const selectedTimeSlot = findById(timeSlots, timeSlotId);
   const selectedMode = findById(userModes, modeId);
   const rawRoutes = createCandidateRoutes(selectedOrigin, selectedDestination);
-  const scoredRoutes = scoreRoutes(rawRoutes, weather, selectedTimeSlot, selectedMode).sort(
+  const scoredRoutes = scoreRoutes(rawRoutes, weather, selectedTimeSlot, selectedMode, { plannedPlaceCount }).sort(
     (a, b) => b.recommendationScore - a.recommendationScore,
   );
   const allowedRoutes = scoredRoutes.filter((route) => route.allowed);

@@ -52,6 +52,7 @@ export async function fetchAiRecommendation({ recommendation, selectedRoute }) {
       reasons: selectedRoute.reasons,
       segments: selectedRoute.segments,
       breakdown: selectedRoute.breakdown,
+      scoreModel: selectedRoute.scoreModel,
     },
     comparedRoutes: recommendation.routes.map((route) => ({
       name: route.name,
@@ -60,6 +61,7 @@ export async function fetchAiRecommendation({ recommendation, selectedRoute }) {
       comfortScore: route.comfortScore,
       recommendationScore: route.recommendationScore,
       allowed: route.allowed,
+      scoreModel: route.scoreModel,
     })),
   };
 
@@ -99,6 +101,7 @@ export async function fetchTravelGuideChat({ question, recommendation, selectedR
       exposureLabel: selectedRoute.exposureLabel,
       reasons: selectedRoute.reasons,
       segments: selectedRoute.segments,
+      scoreModel: selectedRoute.scoreModel,
     },
     plannedPlaces: plannedPlaces.map((place) => ({
       name: place.name,
