@@ -31,6 +31,7 @@ OPENAI_MODEL=gpt-5.5
 OPENAI_REASONING_EFFORT=low
 OPENAI_TEXT_VERBOSITY=low
 COOLPATH_ACCESS_TOKEN=
+COOLPATH_DEMO_GUARD=
 ```
 
 ## 배포 후 확인할 URL
@@ -56,6 +57,30 @@ https://배포도메인.vercel.app/?access=COOLPATH_ACCESS_TOKEN에_넣은_값
 
 처음 한 번 이 링크로 접속하면 7일짜리 보안 쿠키가 발급되고, 이후에는 일반 배포 URL로도 접속할 수 있다.
 토큰이 유출되면 Vercel 환경변수 값을 바꾼 뒤 Redeploy한다.
+
+## 시연 안정성 보호
+
+배포 URL 또는 접근 링크가 외부에 노출되더라도 API 호출이 과도하게 발생하지 않도록 보호 로직이 적용되어 있다.
+
+적용된 보호:
+
+- OpenAI 요청 rate limit
+- 사진 분석 요청 크기 제한
+- Static Map 요청 파라미터 allowlist
+- 주소 검색 길이 제한
+- 좌표 범위 검증
+- 외부 API timeout
+- 비정상 HTTP method 차단
+
+기본값은 보호 로직이 켜진 상태다.
+만약 발표 직전에 정상 사용자가 너무 자주 제한된다면 Vercel 환경변수에 아래 값을 추가하고 Redeploy하면 보호 로직 중 rate limit만 끌 수 있다.
+
+```text
+COOLPATH_DEMO_GUARD=off
+```
+
+단, 이 값은 긴급 우회용이다.
+일반적으로는 비워두는 것이 좋다.
 
 ## 배포 후 필수 확인
 
