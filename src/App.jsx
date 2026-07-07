@@ -807,7 +807,7 @@ function buildPlanTitle(durationId, plannedPlaces) {
 function App() {
   const [activePage, setActivePage] = useState(() => normalizePage(window.location.hash.replace('#', '')));
   const [originAddress, setOriginAddress] = useState('현재 위치 주소 확인 중');
-  const [originAnchorId, setOriginAnchorId] = useState('eiffel');
+  const [originAnchorId] = useState('eiffel');
   const [originOverride, setOriginOverride] = useState(null);
   const [destinationAddress, setDestinationAddress] = useState('루브르 박물관, Paris');
   const [destinationOverride, setDestinationOverride] = useState(null);
@@ -1138,19 +1138,6 @@ function App() {
     setPlaceResolveState((current) => ({
       ...current,
       destination: '주소를 바꾸면 지도 기준점으로 먼저 경로를 계산합니다. 필요하면 주소 좌표 찾기를 누르세요.',
-    }));
-  };
-
-  const pickOriginOnMap = (placeId) => {
-    const place = parisPlaces.find((item) => item.id === placeId);
-    if (!place) return;
-    setOriginAnchorId(place.id);
-    setOriginAddress(place.name);
-    setOriginOverride(null);
-    setPlanGenerated(false);
-    setPlaceResolveState((current) => ({
-      ...current,
-      origin: `${place.name} 기준으로 출발지를 설정했습니다.`,
     }));
   };
 
@@ -2176,14 +2163,11 @@ function App() {
             routes={recommendation.routes}
             selectedRoute={selectedRoute}
             originAddress={originAddress}
-            originAnchorId={originAnchorId}
             destinationAddress={destinationAddress}
-            destinationAnchorId={destinationId}
             placeResolveState={placeResolveState}
             mapZoom={mapZoom}
             onZoomChange={changeMapZoom}
             onOriginAddressChange={changeOriginAddress}
-            onOriginAnchorChange={pickOriginOnMap}
             onDestinationAddressChange={changeDestinationAddress}
             onDestinationAnchorChange={pickDestinationOnMap}
             onResolveAddress={resolveAddress}
@@ -2194,9 +2178,6 @@ function App() {
 
         {activePage === 'extras' && (
           <ExtraPage
-            recommendation={recommendation}
-            selectedRoute={selectedRoute}
-            plannedPlaces={plannedPlaces}
             guideMessages={guideMessages}
             guideInput={guideInput}
             guideStatus={guideStatus}
@@ -2276,67 +2257,6 @@ function AccordionSection({ id, icon, title, caption, badge, isOpen, onToggle, c
       </button>
       {isOpen && <div className="accordion-body">{children}</div>}
     </section>
-  );
-}
-
-function LocationInputCard({
-  type,
-  label,
-  value,
-  activePlaceId,
-  status,
-  onChange,
-  onPickPlace,
-  onResolve,
-  onUseCurrent,
-}) {
-  return (
-    <section className="location-card">
-      <label className="field-row">
-        <span>{label}</span>
-        <input
-          type="text"
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          placeholder={type === 'origin' ? '현재 위치 또는 출발 주소' : 'ex. Louvre Museum, Paris'}
-        />
-      </label>
-      <div className="location-action-row">
-        {type === 'origin' && (
-          <button type="button" className="mini-action" onClick={onUseCurrent}>
-            <Navigation size={14} aria-hidden="true" />
-            현재위치
-          </button>
-        )}
-        <button type="button" className="mini-action" onClick={onResolve}>
-          <Search size={14} aria-hidden="true" />
-          주소 좌표 찾기
-        </button>
-      </div>
-      <PlaceMapPicker activePlaceId={activePlaceId} onPickPlace={onPickPlace} />
-      <p className="location-status">{status}</p>
-    </section>
-  );
-}
-
-function PlaceMapPicker({ activePlaceId, onPickPlace }) {
-  return (
-    <div className="place-map-picker" aria-label="지도에서 위치 선택">
-      {parisPlaces.map((place) => (
-        <button
-          type="button"
-          key={place.id}
-          className={place.id === activePlaceId ? 'map-pick-dot is-active' : 'map-pick-dot'}
-          style={{ left: `${place.x}%`, top: `${place.y}%` }}
-          onClick={() => onPickPlace(place.id)}
-          aria-label={`${place.name} 지도에서 선택`}
-          title={place.name}
-        >
-          <span />
-          {place.id === activePlaceId && <strong>{place.shortName}</strong>}
-        </button>
-      ))}
-    </div>
   );
 }
 
@@ -2696,14 +2616,11 @@ function RouteSelectionPage({
   routes,
   selectedRoute,
   originAddress,
-  originAnchorId,
   destinationAddress,
-  destinationAnchorId,
   placeResolveState,
   mapZoom,
   onZoomChange,
   onOriginAddressChange,
-  onOriginAnchorChange,
   onDestinationAddressChange,
   onDestinationAnchorChange,
   onResolveAddress,
@@ -2717,13 +2634,10 @@ function RouteSelectionPage({
     <section className="screen route-screen">
       <RouteInputPanel
         originAddress={originAddress}
-        originAnchorId={originAnchorId}
         destinationAddress={destinationAddress}
-        destinationAnchorId={destinationAnchorId}
         plannedPlaces={plannedPlaces}
         placeResolveState={placeResolveState}
         onOriginAddressChange={onOriginAddressChange}
-        onOriginAnchorChange={onOriginAnchorChange}
         onDestinationAddressChange={onDestinationAddressChange}
         onDestinationAnchorChange={onDestinationAnchorChange}
         onResolveAddress={onResolveAddress}
@@ -2800,30 +2714,15 @@ function RouteSelectionPage({
 
 function RouteInputPanel({
   originAddress,
-  originAnchorId,
   destinationAddress,
-  destinationAnchorId,
   plannedPlaces,
   placeResolveState,
   onOriginAddressChange,
-  onOriginAnchorChange,
   onDestinationAddressChange,
   onDestinationAnchorChange,
   onResolveAddress,
   onUseCurrentOrigin,
 }) {
-  const [pickTarget, setPickTarget] = useState('destination');
-  const activePlaceId = pickTarget === 'origin' ? originAnchorId : destinationAnchorId;
-  const status = pickTarget === 'origin' ? placeResolveState.origin : placeResolveState.destination;
-
-  const pickPlace = (placeId) => {
-    if (pickTarget === 'origin') {
-      onOriginAnchorChange(placeId);
-      return;
-    }
-    onDestinationAnchorChange(placeId);
-  };
-
   return (
     <section className="route-input-panel" aria-label="지도 출발 도착 설정">
       <SectionTitle icon={MapPin} title="출발·도착 설정" caption="검색하거나 지도에서 눌러 위치를 바꿉니다." />
@@ -2865,20 +2764,12 @@ function RouteInputPanel({
             <MapPin size={14} aria-hidden="true" />
             {place.shortName}
           </button>
-        ))}
+          ))}
       </div>
 
-      <div className="map-pick-toolbar" aria-label="지도 선택 대상">
-        <button type="button" className={pickTarget === 'origin' ? 'is-active' : ''} onClick={() => setPickTarget('origin')}>
-          출발지로 찍기
-        </button>
-        <button type="button" className={pickTarget === 'destination' ? 'is-active' : ''} onClick={() => setPickTarget('destination')}>
-          도착지로 찍기
-        </button>
-      </div>
-
-      <PlaceMapPicker activePlaceId={activePlaceId} onPickPlace={pickPlace} />
-      <p className="location-status">{status}</p>
+      <p className="location-status">
+        {placeResolveState.origin} · {placeResolveState.destination}
+      </p>
     </section>
   );
 }
@@ -3024,32 +2915,9 @@ function StatBlock({ label, value }) {
   );
 }
 
-function ExtraPage({
-  recommendation,
-  selectedRoute,
-  plannedPlaces,
-  guideMessages,
-  guideInput,
-  guideStatus,
-  onGuideInputChange,
-  onAskGuide,
-}) {
-  const destinationMeta = getPlaceMeta(recommendation.destination.sourceId || recommendation.destination.id);
-
+function ExtraPage({ guideMessages, guideInput, guideStatus, onGuideInputChange, onAskGuide }) {
   return (
     <section className="screen guide-screen">
-      <section className="guide-context">
-        <div>
-          <p className="eyebrow">Ask AI Guide</p>
-          <h2>{recommendation.destination.name}</h2>
-          <p>{destinationMeta.note}</p>
-        </div>
-        <div className="guide-metrics">
-          <MetricPill icon={ThermometerSun} label="체감" value={`${recommendation.weatherModel.feelsLike}°C`} />
-          <MetricPill icon={ShieldCheck} label="경로" value={`${selectedRoute.recommendationScore}점`} />
-        </div>
-      </section>
-
       <div className="guide-suggestions">
         {guideSuggestions.map((question) => (
           <button type="button" key={question} onClick={() => onAskGuide(question)}>
@@ -3094,34 +2962,6 @@ function ExtraPage({
           </button>
         </form>
       </section>
-
-      <section className="guide-route-card">
-        <SectionTitle icon={Route} title="선택 경로 요약" />
-        <div className="step-list">
-          {selectedRoute.segments.slice(0, 4).map((segment, index) => (
-            <div key={`${segment.label}-${index}`} className="map-step">
-              <span>{index + 1}</span>
-              <div>
-                <strong>{segment.label}</strong>
-                <small>
-                  {segment.mode} · 약 {segment.km}km
-                </small>
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="planned-strip">
-          {plannedPlaces.map((place, index) => (
-            <span
-              key={place.id}
-              className={place.id === recommendation.destination.id || place.id === recommendation.destination.sourceId ? 'plan-dot is-current' : 'plan-dot'}
-            >
-              {index + 1}. {place.shortName}
-            </span>
-          ))}
-        </div>
-      </section>
-
     </section>
   );
 }
