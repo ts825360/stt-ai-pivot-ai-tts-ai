@@ -2359,7 +2359,7 @@ function PlanPage({
         id="places"
         icon={MapPin}
         title="장소 선택"
-        caption="직접 고르거나 AI가 오늘의 장소를 추천"
+        caption="장소를 고르거나 AI가 조건에 맞춰 자동 추천"
         badge={autoRecommendEnabled ? 'AI 자동추천' : `${selectedPlaceIds.length}개 선택`}
         isOpen={expandedSections.places}
         onToggle={onToggleSection}
@@ -2367,7 +2367,7 @@ function PlanPage({
         <div className="recommend-switch-card">
           <div>
             <strong>AI 자동추천</strong>
-            <small>날씨, 이동 부담, 여행 페이스를 기준으로 장소를 자동 구성합니다.</small>
+            <small>장소를 선택하지 않아도 날씨, 이동 부담, 여행 페이스에 맞춰 행선지를 추천합니다.</small>
           </div>
           <button
             type="button"
@@ -2394,7 +2394,7 @@ function PlanPage({
         {autoRecommendEnabled && (
           <div className="auto-recommend-note">
             <Sparkles size={17} aria-hidden="true" />
-            <span>자동추천 중에는 장소를 직접 선택하지 않습니다. 사용자는 기간과 페이스만 고르면 됩니다.</span>
+            <span>장소를 선택하지 않아도 선택한 조건에 맞춰 AI가 오늘의 행선지를 자동으로 추천합니다.</span>
           </div>
         )}
 
