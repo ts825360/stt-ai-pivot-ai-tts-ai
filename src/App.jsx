@@ -2743,7 +2743,7 @@ function RouteSelectionPage({
         <div className="route-score-row">
           <span className="score-token">
             <strong>{selectedRoute.recommendationScore}</strong>
-            <small>추천점수</small>
+            <small>부담점수</small>
           </span>
           <div>
             <p className="eyebrow">추천 경로</p>

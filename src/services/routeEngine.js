@@ -418,11 +418,11 @@ function buildNarrative(bestRoute, routes, context) {
       : context.weatherModel.feelsLike >= 32
         ? '현재 체감 더위가 높아 세부 안내에서 그늘과 실내 대피 지점을 함께 설명합니다'
         : '현재 날씨는 추천 사유와 현장 안내에 보조 정보로 사용합니다';
-  const modePhrase = '추천점수는 도보, 탑승, 대기/환승, 최단 대비 추가시간을 하루 이동부담으로 환산해 계산합니다.';
+  const modePhrase = '부담점수는 도보, 탑승, 대기/환승, 최단 대비 추가시간을 하루 이동부담으로 환산해 계산합니다.';
   const tradeoff =
     fastest.id !== bestRoute.id
       ? `${fastest.name}보다 ${bestRoute.detourMinutes}분 더 걸리지만 보행 ${bestRoute.walkingKm}km, 예상 도보 ${bestRoute.walkingMinutes}분으로 비교할 수 있습니다.`
-      : '가장 빠른 후보라서 추천 점수 기준에서도 우선 표시합니다.';
+      : '가장 빠른 후보라서 부담 점수 기준에서도 우선 표시합니다.';
   const comfortNote = '그늘, 강변, 카페 선호 같은 요소는 점수 가중치가 아니라 사용자가 이해할 수 있는 추천 사유로 표시합니다.';
   const excludedNote =
     excluded.length > 0 ? `${excluded.map((route) => route.name).join(', ')}는 가장 빠른 후보보다 우회 시간이 커 보조 후보로만 표시합니다.` : '';
