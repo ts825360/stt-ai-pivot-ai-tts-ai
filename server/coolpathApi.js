@@ -1,17 +1,57 @@
 const staticMapCache = new Map();
+const rateLimitBuckets = new Map();
 const STATIC_MAP_CACHE_LIMIT = 80;
 const STATIC_MAP_CACHE_TTL_MS = 5 * 60 * 1000;
+const MAX_RATE_LIMIT_BUCKETS = 1200;
+const DEFAULT_FETCH_TIMEOUT_MS = 8000;
+const OPENAI_FETCH_TIMEOUT_MS = 14000;
+const TEXT_API_BODY_LIMIT_BYTES = 36 * 1024;
+const PHOTO_API_BODY_LIMIT_BYTES = 1_900_000;
+const PHOTO_DATA_URL_LIMIT_CHARS = 1_750_000;
+const STATIC_MAP_QUERY_LIMIT_CHARS = 4600;
 
-export function jsonResponse(body, status = 200) {
+const RATE_LIMITS = {
+  weather: { limit: 40, windowMs: 60 * 1000 },
+  geocode: { limit: 24, windowMs: 60 * 1000 },
+  'static-map': { limit: 90, windowMs: 60 * 1000 },
+  'ai-recommendation': { limit: 14, windowMs: 60 * 1000 },
+  'travel-guide': { limit: 10, windowMs: 60 * 1000 },
+  'photo-guide': { limit: 5, windowMs: 60 * 1000 },
+  openai: { limit: 18, windowMs: 60 * 1000 },
+};
+
+const STATIC_MAP_ALLOWED_PARAMS = new Set([
+  'center',
+  'zoom',
+  'size',
+  'scale',
+  'format',
+  'maptype',
+  'language',
+  'region',
+  'markers',
+  'path',
+  'style',
+  'visible',
+]);
+
+export function jsonResponse(body, status = 200, headers = {}) {
   return Response.json(body, {
     status,
     headers: {
       'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+      ...headers,
     },
   });
 }
 
-export async function readJsonRequest(request) {
+export async function readJsonRequest(request, maxBytes = TEXT_API_BODY_LIMIT_BYTES) {
+  const sizeError = enforceContentLength(request, maxBytes);
+  if (sizeError) {
+    throw new Error('REQUEST_TOO_LARGE');
+  }
+
   try {
     return await request.json();
   } catch {
@@ -55,6 +95,84 @@ const roundValue = (value, precision = 0) => {
   const numericValue = asNumber(value);
   return numericValue === null ? null : Number(numericValue.toFixed(precision));
 };
+
+function getClientIdentity(request) {
+  const forwarded = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
+  return (
+    forwarded ||
+    request.headers.get('x-real-ip') ||
+    request.headers.get('cf-connecting-ip') ||
+    request.headers.get('x-vercel-forwarded-for') ||
+    'unknown-client'
+  );
+}
+
+function cleanupRateLimitBuckets(now) {
+  if (rateLimitBuckets.size < MAX_RATE_LIMIT_BUCKETS) return;
+
+  for (const [key, bucket] of rateLimitBuckets) {
+    if (bucket.resetAt <= now) {
+      rateLimitBuckets.delete(key);
+    }
+  }
+
+  if (rateLimitBuckets.size >= MAX_RATE_LIMIT_BUCKETS) {
+    const keysToDrop = [...rateLimitBuckets.keys()].slice(0, Math.ceil(MAX_RATE_LIMIT_BUCKETS * 0.15));
+    for (const key of keysToDrop) rateLimitBuckets.delete(key);
+  }
+}
+
+export function enforceMethod(request, allowedMethods) {
+  if (allowedMethods.includes(request.method)) return null;
+  return jsonResponse({ error: `Method ${request.method} is not allowed.` }, 405, {
+    Allow: allowedMethods.join(', '),
+  });
+}
+
+export function enforceContentLength(request, maxBytes) {
+  const contentLength = Number(request.headers.get('content-length') || 0);
+  if (contentLength > maxBytes) {
+    return jsonResponse({ error: 'Request body is too large for this prototype endpoint.' }, 413);
+  }
+  return null;
+}
+
+export function enforceRateLimit(request, scope, override) {
+  if (process.env.COOLPATH_DEMO_GUARD === 'off') return null;
+
+  const config = override ?? RATE_LIMITS[scope] ?? RATE_LIMITS.openai;
+  const now = Date.now();
+  cleanupRateLimitBuckets(now);
+
+  const key = `${scope}:${getClientIdentity(request)}`;
+  const current = rateLimitBuckets.get(key);
+  const bucket = current && current.resetAt > now ? current : { count: 0, resetAt: now + config.windowMs };
+
+  bucket.count += 1;
+  rateLimitBuckets.set(key, bucket);
+
+  if (bucket.count <= config.limit) return null;
+
+  const retryAfter = Math.max(1, Math.ceil((bucket.resetAt - now) / 1000));
+  return jsonResponse(
+    {
+      error: '요청이 많아 잠시 보호 모드로 제한했습니다. 1분 뒤 다시 시도해 주세요.',
+    },
+    429,
+    { 'Retry-After': String(retryAfter) },
+  );
+}
+
+function isValidCoordinate(lat, lng) {
+  return lat !== null && lng !== null && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS) {
+  return fetch(url, {
+    ...options,
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+}
 
 function getWeatherProvider(env, weatherKey) {
   const configuredProvider = env.VITE_WEATHER_PROVIDER || env.WEATHER_PROVIDER;
@@ -113,6 +231,12 @@ function normalizeOpenWeather(data) {
 }
 
 export async function getWeather(request) {
+  const methodError = enforceMethod(request, ['GET']);
+  if (methodError) return methodError;
+
+  const limited = enforceRateLimit(request, 'weather');
+  if (limited) return limited;
+
   const { weatherKey, weatherProvider, mapsReferrer } = getRuntimeEnv();
 
   if (!weatherKey) {
@@ -126,6 +250,12 @@ export async function getWeather(request) {
 
     if (!lat || !lon) {
       return jsonResponse({ error: 'lat and lon are required.' }, 400);
+    }
+
+    const latNumber = asNumber(lat);
+    const lonNumber = asNumber(lon);
+    if (!isValidCoordinate(latNumber, lonNumber)) {
+      return jsonResponse({ error: 'lat and lon must be valid coordinates.' }, 400);
     }
 
     const weatherUrl =
@@ -147,7 +277,7 @@ export async function getWeather(request) {
       weatherUrl.searchParams.set('lang', 'kr');
     }
 
-    const response = await fetch(
+    const response = await fetchWithTimeout(
       weatherUrl,
       weatherProvider === 'google' ? { headers: buildReferrerHeaders(mapsReferrer) } : undefined,
     );
@@ -168,7 +298,82 @@ export async function getWeather(request) {
   }
 }
 
+function validateStaticMapParam(key, value, count) {
+  if (!STATIC_MAP_ALLOWED_PARAMS.has(key)) {
+    return `${key} is not allowed for static map requests.`;
+  }
+
+  if (count > 10) {
+    return `${key} was repeated too many times.`;
+  }
+
+  if (value.length > 1600) {
+    return `${key} is too long.`;
+  }
+
+  if (key === 'zoom') {
+    const zoom = Number(value);
+    if (!Number.isInteger(zoom) || zoom < 1 || zoom > 21) return 'zoom must be an integer from 1 to 21.';
+  }
+
+  if (key === 'size') {
+    const match = /^(\d{2,4})x(\d{2,4})$/.exec(value);
+    if (!match) return 'size must use WIDTHxHEIGHT format.';
+    const width = Number(match[1]);
+    const height = Number(match[2]);
+    if (width < 80 || height < 80 || width > 800 || height > 800) return 'size is outside the allowed range.';
+  }
+
+  if (key === 'scale' && !['1', '2'].includes(value)) {
+    return 'scale must be 1 or 2.';
+  }
+
+  if (key === 'maptype' && !['roadmap', 'satellite', 'terrain', 'hybrid'].includes(value)) {
+    return 'maptype is not supported.';
+  }
+
+  if (key === 'format' && !['png', 'png8', 'png32', 'gif', 'jpg', 'jpg-baseline'].includes(value)) {
+    return 'format is not supported.';
+  }
+
+  if (key === 'language' && !/^[a-z]{2}(-[A-Z]{2})?$/.test(value)) {
+    return 'language is invalid.';
+  }
+
+  if (key === 'region' && !/^[A-Za-z]{2}$/.test(value)) {
+    return 'region is invalid.';
+  }
+
+  return null;
+}
+
+function appendSafeStaticMapParams(requestUrl, mapUrl) {
+  if (requestUrl.search.length > STATIC_MAP_QUERY_LIMIT_CHARS) {
+    return 'Static map query is too long.';
+  }
+
+  const counts = new Map();
+  for (const [key, value] of requestUrl.searchParams) {
+    if (key === 'key') continue;
+
+    const count = (counts.get(key) ?? 0) + 1;
+    counts.set(key, count);
+    const validationError = validateStaticMapParam(key, value, count);
+    if (validationError) return validationError;
+
+    mapUrl.searchParams.append(key, value);
+  }
+
+  return null;
+}
+
 export async function getStaticMap(request) {
+  const methodError = enforceMethod(request, ['GET']);
+  if (methodError) return methodError;
+
+  const limited = enforceRateLimit(request, 'static-map');
+  if (limited) return limited;
+
   const { mapsKey, mapsReferrer } = getRuntimeEnv();
 
   if (!mapsKey) {
@@ -179,11 +384,9 @@ export async function getStaticMap(request) {
     const requestUrl = new URL(request.url);
     const mapUrl = new URL('https://maps.googleapis.com/maps/api/staticmap');
 
-    for (const [key, value] of requestUrl.searchParams) {
-      if (key !== 'key') {
-        mapUrl.searchParams.append(key, value);
-      }
-    }
+    const validationError = appendSafeStaticMapParams(requestUrl, mapUrl);
+    if (validationError) return jsonResponse({ error: validationError }, 400);
+
     mapUrl.searchParams.set('key', mapsKey);
 
     const cacheKey = mapUrl.toString();
@@ -200,7 +403,7 @@ export async function getStaticMap(request) {
       });
     }
 
-    const response = await fetch(mapUrl, { headers: buildReferrerHeaders(mapsReferrer) });
+    const response = await fetchWithTimeout(mapUrl, { headers: buildReferrerHeaders(mapsReferrer) });
     const body = await response.arrayBuffer();
     const contentType = response.headers.get('content-type') || 'application/octet-stream';
 
@@ -237,7 +440,7 @@ async function geocodeWithNominatim(address) {
   nominatimUrl.searchParams.set('limit', '1');
   nominatimUrl.searchParams.set('accept-language', 'ko,en');
 
-  const response = await fetch(nominatimUrl, {
+  const response = await fetchWithTimeout(nominatimUrl, {
     headers: {
       'User-Agent': 'CoolPath-AI-MVP/0.1 production geocoder',
       Accept: 'application/json',
@@ -267,7 +470,7 @@ async function reverseGeocodeWithNominatim(lat, lng) {
   nominatimUrl.searchParams.set('zoom', '18');
   nominatimUrl.searchParams.set('accept-language', 'ko,en');
 
-  const response = await fetch(nominatimUrl, {
+  const response = await fetchWithTimeout(nominatimUrl, {
     headers: {
       'User-Agent': 'CoolPath-AI-MVP/0.1 production reverse geocoder',
       Accept: 'application/json',
@@ -289,6 +492,12 @@ async function reverseGeocodeWithNominatim(lat, lng) {
 }
 
 export async function geocode(request) {
+  const methodError = enforceMethod(request, ['GET']);
+  if (methodError) return methodError;
+
+  const limited = enforceRateLimit(request, 'geocode');
+  if (limited) return limited;
+
   const { mapsKey, mapsReferrer } = getRuntimeEnv();
 
   if (!mapsKey) {
@@ -303,13 +512,17 @@ export async function geocode(request) {
       return jsonResponse({ error: 'address is required.' }, 400);
     }
 
+    if (address.length > 220 || /[\u0000-\u001f]/.test(address)) {
+      return jsonResponse({ error: 'address is too long or contains invalid control characters.' }, 400);
+    }
+
     const geocodeUrl = new URL('https://maps.googleapis.com/maps/api/geocode/json');
     geocodeUrl.searchParams.set('address', address);
     geocodeUrl.searchParams.set('region', 'fr');
     geocodeUrl.searchParams.set('language', 'ko');
     geocodeUrl.searchParams.set('key', mapsKey);
 
-    const response = await fetch(geocodeUrl, { headers: buildReferrerHeaders(mapsReferrer) });
+    const response = await fetchWithTimeout(geocodeUrl, { headers: buildReferrerHeaders(mapsReferrer) });
     const data = await response.json();
     const firstResult = data.results?.[0];
 
@@ -341,6 +554,12 @@ export async function geocode(request) {
 }
 
 export async function reverseGeocode(request) {
+  const methodError = enforceMethod(request, ['GET']);
+  if (methodError) return methodError;
+
+  const limited = enforceRateLimit(request, 'geocode');
+  if (limited) return limited;
+
   const { mapsKey, mapsReferrer } = getRuntimeEnv();
 
   try {
@@ -352,13 +571,17 @@ export async function reverseGeocode(request) {
       return jsonResponse({ error: 'lat and lng are required.' }, 400);
     }
 
+    if (!isValidCoordinate(lat, lng)) {
+      return jsonResponse({ error: 'lat and lng must be valid coordinates.' }, 400);
+    }
+
     if (mapsKey) {
       const geocodeUrl = new URL('https://maps.googleapis.com/maps/api/geocode/json');
       geocodeUrl.searchParams.set('latlng', `${lat},${lng}`);
       geocodeUrl.searchParams.set('language', 'ko');
       geocodeUrl.searchParams.set('key', mapsKey);
 
-      const response = await fetch(geocodeUrl, { headers: buildReferrerHeaders(mapsReferrer) });
+      const response = await fetchWithTimeout(geocodeUrl, { headers: buildReferrerHeaders(mapsReferrer) });
       const data = await response.json();
       const firstResult = data.results?.[0];
 
@@ -409,7 +632,33 @@ function buildOpenAIRequest({ system, userContent, maxOutputTokens }) {
   return requestBody;
 }
 
-export async function callOpenAI(request, { system, payload, userContent, maxOutputTokens, errorLabel }) {
+export function validatePhotoPayload(payload) {
+  if (!payload.imageDataUrl || !String(payload.imageDataUrl).startsWith('data:image/')) {
+    return jsonResponse({ error: 'imageDataUrl is required.' }, 400);
+  }
+
+  if (String(payload.imageDataUrl).length > PHOTO_DATA_URL_LIMIT_CHARS) {
+    return jsonResponse({ error: 'Image payload is too large for the prototype guard.' }, 413);
+  }
+
+  return null;
+}
+
+export async function callOpenAI(
+  request,
+  { system, payload, userContent, maxOutputTokens, errorLabel, rateLimitScope = 'openai', maxBodyBytes = TEXT_API_BODY_LIMIT_BYTES },
+) {
+  const methodError = enforceMethod(request, ['POST']);
+  if (methodError) return methodError;
+
+  const sizeError = enforceContentLength(request, maxBodyBytes);
+  if (sizeError) return sizeError;
+
+  if (rateLimitScope) {
+    const limited = enforceRateLimit(request, rateLimitScope);
+    if (limited) return limited;
+  }
+
   const { openaiKey, openaiModel } = getRuntimeEnv();
 
   if (!openaiKey) {
@@ -417,7 +666,7 @@ export async function callOpenAI(request, { system, payload, userContent, maxOut
   }
 
   try {
-    const response = await fetch('https://api.openai.com/v1/responses', {
+    const response = await fetchWithTimeout('https://api.openai.com/v1/responses', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${openaiKey}`,
@@ -430,7 +679,7 @@ export async function callOpenAI(request, { system, payload, userContent, maxOut
           maxOutputTokens,
         }),
       ),
-    });
+    }, OPENAI_FETCH_TIMEOUT_MS);
     const data = await response.json();
 
     if (!response.ok) {

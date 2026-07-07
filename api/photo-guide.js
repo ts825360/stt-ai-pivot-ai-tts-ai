@@ -1,12 +1,28 @@
-import { callOpenAI, jsonResponse, readJsonRequest } from '../server/coolpathApi.js';
+import {
+  callOpenAI,
+  enforceContentLength,
+  enforceMethod,
+  enforceRateLimit,
+  readJsonRequest,
+  validatePhotoPayload,
+} from '../server/coolpathApi.js';
+
+const PHOTO_BODY_LIMIT_BYTES = 1_900_000;
 
 export default {
   async fetch(request) {
-    const payload = await readJsonRequest(request);
+    const methodError = enforceMethod(request, ['POST']);
+    if (methodError) return methodError;
 
-    if (!payload.imageDataUrl || !String(payload.imageDataUrl).startsWith('data:image/')) {
-      return jsonResponse({ error: 'imageDataUrl is required.' }, 400);
-    }
+    const sizeError = enforceContentLength(request, PHOTO_BODY_LIMIT_BYTES);
+    if (sizeError) return sizeError;
+
+    const limited = enforceRateLimit(request, 'photo-guide');
+    if (limited) return limited;
+
+    const payload = await readJsonRequest(request, PHOTO_BODY_LIMIT_BYTES);
+    const photoError = validatePhotoPayload(payload);
+    if (photoError) return photoError;
 
     return callOpenAI(request, {
       system:
@@ -27,6 +43,8 @@ export default {
       ],
       maxOutputTokens: 320,
       errorLabel: 'Photo guide',
+      rateLimitScope: null,
+      maxBodyBytes: PHOTO_BODY_LIMIT_BYTES,
     });
   },
 };
