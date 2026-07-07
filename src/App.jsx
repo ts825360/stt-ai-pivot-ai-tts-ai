@@ -22,7 +22,6 @@ import {
   Map,
   MapPin,
   MessagesSquare,
-  Minus,
   Navigation,
   Plus,
   Route,
@@ -110,6 +109,37 @@ const guideSuggestions = [
   '지하철 입구 사진을 찍으면 무엇을 확인해야 해?',
   '정류장이 맞는지 확인하려면 어떤 표지판을 봐야 해?',
 ];
+const GUIDE_DAILY_LIMIT = 2;
+const GUIDE_USAGE_STORAGE_KEY = 'coolpath-guide-usage-v1';
+const GUIDE_LIMIT_MESSAGE =
+  '오늘 무료 AI 질문 2회를 모두 사용했습니다. 추가 질문은 프리미엄 질문권 또는 여행 비서 구독으로 확장할 수 있습니다.';
+
+function getGuideUsageDateKey() {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
+function readGuideUsageCount() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(GUIDE_USAGE_STORAGE_KEY) || 'null');
+    return saved?.date === getGuideUsageDateKey() ? Math.min(Number(saved.count) || 0, GUIDE_DAILY_LIMIT) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeGuideUsageCount(count) {
+  try {
+    window.localStorage.setItem(
+      GUIDE_USAGE_STORAGE_KEY,
+      JSON.stringify({ date: getGuideUsageDateKey(), count: Math.min(count, GUIDE_DAILY_LIMIT) }),
+    );
+  } catch {
+    // Storage can fail in private mode; the in-memory state still enforces the current session.
+  }
+}
 
 function normalizePage(page) {
   return ['plan', 'routes', 'extras', 'trips', 'camera'].includes(page) ? page : 'plan';
@@ -849,6 +879,7 @@ function App() {
   const [guideMessages, setGuideMessages] = useState([]);
   const [guideInput, setGuideInput] = useState('');
   const [guideStatus, setGuideStatus] = useState('idle');
+  const [guideUsageCount, setGuideUsageCount] = useState(readGuideUsageCount);
   const [cameraStatus, setCameraStatus] = useState('idle');
   const [cameraStream, setCameraStream] = useState(null);
   const [cameraDevices, setCameraDevices] = useState([]);
@@ -1407,6 +1438,25 @@ function App() {
   const askTravelGuide = async (questionOverride) => {
     const question = (questionOverride ?? guideInput).trim();
     if (!question || guideStatus === 'loading') return;
+
+    const storedUsageCount = readGuideUsageCount();
+    if (storedUsageCount !== guideUsageCount) {
+      setGuideUsageCount(storedUsageCount);
+    }
+
+    if (storedUsageCount >= GUIDE_DAILY_LIMIT) {
+      setGuideInput('');
+      setGuideMessages((current) =>
+        current.at(-1)?.text === GUIDE_LIMIT_MESSAGE
+          ? current
+          : [...current, { id: `assistant-limit-${Date.now()}`, role: 'assistant', text: GUIDE_LIMIT_MESSAGE }],
+      );
+      return;
+    }
+
+    const nextUsageCount = storedUsageCount + 1;
+    writeGuideUsageCount(nextUsageCount);
+    setGuideUsageCount(nextUsageCount);
 
     setGuideInput('');
     setGuideStatus('loading');
@@ -2181,6 +2231,8 @@ function App() {
             guideMessages={guideMessages}
             guideInput={guideInput}
             guideStatus={guideStatus}
+            guideUsageCount={guideUsageCount}
+            guideDailyLimit={GUIDE_DAILY_LIMIT}
             onGuideInputChange={setGuideInput}
             onAskGuide={askTravelGuide}
           />
@@ -2858,10 +2910,10 @@ function MapPanel({ places, origin, destination, route, mapZoom, onZoomChange })
         {staticMapUrl && <img className="google-map-layer" src={staticMapUrl} alt="" />}
         <div className="map-zoom-controls" aria-label="지도 확대 축소">
           <button type="button" onClick={() => onZoomChange(1)} aria-label="지도 확대">
-            <Plus size={17} aria-hidden="true" />
+            <span className="zoom-symbol" aria-hidden="true">+</span>
           </button>
           <button type="button" onClick={() => onZoomChange(-1)} aria-label="지도 축소">
-            <Minus size={17} aria-hidden="true" />
+            <span className="zoom-symbol" aria-hidden="true">-</span>
           </button>
         </div>
         <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
@@ -2915,12 +2967,15 @@ function StatBlock({ label, value }) {
   );
 }
 
-function ExtraPage({ guideMessages, guideInput, guideStatus, onGuideInputChange, onAskGuide }) {
+function ExtraPage({ guideMessages, guideInput, guideStatus, guideUsageCount, guideDailyLimit, onGuideInputChange, onAskGuide }) {
+  const guideLimitReached = guideUsageCount >= guideDailyLimit;
+  const isGuideLoading = guideStatus === 'loading';
+
   return (
     <section className="screen guide-screen">
       <div className="guide-suggestions">
         {guideSuggestions.map((question) => (
-          <button type="button" key={question} onClick={() => onAskGuide(question)}>
+          <button type="button" key={question} onClick={() => onAskGuide(question)} disabled={guideLimitReached || isGuideLoading}>
             {question}
           </button>
         ))}
@@ -2944,6 +2999,12 @@ function ExtraPage({ guideMessages, guideInput, guideStatus, onGuideInputChange,
           )}
         </div>
 
+        <div className={guideLimitReached ? 'guide-usage-note is-limited' : 'guide-usage-note'}>
+          {guideLimitReached
+            ? `오늘 무료 질문 ${guideUsageCount}/${guideDailyLimit} · 추가 질문은 프리미엄 질문권으로 확장`
+            : `오늘 무료 질문 ${guideUsageCount}/${guideDailyLimit}`}
+        </div>
+
         <form
           className="guide-composer"
           onSubmit={(event) => {
@@ -2955,9 +3016,10 @@ function ExtraPage({ guideMessages, guideInput, guideStatus, onGuideInputChange,
             type="text"
             value={guideInput}
             onChange={(event) => onGuideInputChange(event.target.value)}
-            placeholder="행선지, 정류장, 표지판 확인 질문"
+            placeholder={guideLimitReached ? '오늘 무료 질문 2회를 모두 사용했습니다.' : '행선지, 정류장, 표지판 확인 질문'}
+            disabled={guideLimitReached}
           />
-          <button type="submit" aria-label="질문 보내기" disabled={guideStatus === 'loading'}>
+          <button type="submit" aria-label="질문 보내기" disabled={isGuideLoading || guideLimitReached}>
             <Send size={18} aria-hidden="true" />
           </button>
         </form>
